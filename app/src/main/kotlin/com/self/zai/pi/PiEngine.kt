@@ -211,12 +211,19 @@ class PiEngine(
         callJs("syncCustomProviders", payload.toString())
     }
 
-    fun startChatGptLogin() {
+    fun startChatGptLogin(method: String = "browser") {
         _authState.value = AuthUiState.InProgress(
-            providerId = "openai",
-            statusMessage = "正在准备 ChatGPT 登录通道…",
+            providerId = "openai-codex",
+            statusMessage = if (method == "device_code") {
+                "正在获取 Codex 设备授权码…"
+            } else {
+                "正在准备 ChatGPT Codex 登录通道…"
+            },
         )
-        val payload = JSONObject().put("provider", "openai").put("type", "oauth")
+        val payload = JSONObject()
+            .put("provider", "openai-codex")
+            .put("type", "oauth")
+            .put("method", method)
         callJs("login", payload.toString())
     }
 
@@ -458,7 +465,7 @@ class PiEngine(
                 val promptId = msg.optString("id")
                 val prompt = msg.optJSONObject("prompt")
                 val current = _authState.value as? AuthUiState.InProgress
-                    ?: AuthUiState.InProgress(providerId = "openai", statusMessage = "请完成登录")
+                    ?: AuthUiState.InProgress(providerId = "openai-codex", statusMessage = "请完成登录")
                 _authState.value = current.copy(
                     promptId = promptId,
                     promptMessage = prompt?.optString("message").orEmpty().ifBlank {
@@ -675,9 +682,10 @@ class PiEngine(
     private fun handleAuthEvent(event: JSONObject?) {
         if (event == null) return
         val current = _authState.value as? AuthUiState.InProgress
-            ?: AuthUiState.InProgress(providerId = "openai", statusMessage = "正在登录 ChatGPT…")
+            ?: AuthUiState.InProgress(providerId = "openai-codex", statusMessage = "正在登录 ChatGPT Codex…")
         val type = event.optString("type")
         val url = event.optString("url").takeIf { it.isNotBlank() }
+            ?: event.optString("verificationUri").takeIf { it.isNotBlank() }
         val userCode = event.optString("userCode").takeIf { it.isNotBlank() }
             ?: event.optString("code").takeIf { it.isNotBlank() }
         val instructions = event.optString("instructions").takeIf { it.isNotBlank() }
@@ -686,7 +694,7 @@ class PiEngine(
         _authState.value = current.copy(
             statusMessage = instructions ?: when (type) {
                 "auth_url", "open_url", "url" -> "请在浏览器中完成 ChatGPT 授权登录"
-                "device_code" -> "请在打开的页面中输入授权码"
+                "device_code" -> "请在打开的页面中输入下方授权码完成登录"
                 else -> current.statusMessage
             },
             openUrl = url ?: current.openUrl,

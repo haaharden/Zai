@@ -1,3 +1,14 @@
+// Make atob tolerant of base64url JWT payloads (used by openai-codex decodeJwt / extractAccountId).
+const nativeAtob = globalThis.atob?.bind(globalThis);
+if (nativeAtob) {
+  globalThis.atob = (input: string) => {
+    const cleaned = String(input).replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+    const pad = cleaned.length % 4;
+    const padded = pad === 0 ? cleaned : cleaned + "=".repeat(4 - pad);
+    return nativeAtob(padded);
+  };
+}
+
 const Signal = AbortSignal as any;
 
 AbortSignal.prototype.throwIfAborted ??= function (this: AbortSignal) {

@@ -14,6 +14,23 @@ const piPkg = JSON.parse(
 
 mkdirSync(outDir, { recursive: true });
 
+const codexWebCryptoPlugin = {
+  name: "codex-webcrypto-random-bytes",
+  setup(build) {
+    build.onLoad({ filter: /[\\/]auth[\\/]oauth[\\/]openai-codex\.js$/ }, (args) => {
+      const src = readFileSync(args.path, "utf8");
+      const patched = src.replace(
+        /let _randomBytes = null;[\s\S]*?\}\s*\n/,
+        'import { randomBytes as _randomBytes } from "node:crypto";\n',
+      );
+      if (patched === src) {
+        throw new Error("Failed to patch openai-codex.js randomBytes loader for WebView");
+      }
+      return { contents: patched, loader: "js" };
+    });
+  },
+};
+
 await build({
   entryPoints: ["src/host.ts"],
   bundle: true,
@@ -22,6 +39,7 @@ await build({
   target: "chrome105",
   minify: true,
   sourcemap: false,
+  plugins: [codexWebCryptoPlugin],
   alias: {
     "node:http": "./src/shims/http.ts",
     "node:crypto": "./src/shims/crypto.ts",

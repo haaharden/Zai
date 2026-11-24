@@ -18,8 +18,8 @@ import {
   type CredentialStore,
   type Model,
 } from "@earendil-works/pi-ai";
+import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
-import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
 import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { googleProvider } from "@earendil-works/pi-ai/providers/google";
@@ -79,8 +79,9 @@ class MirroredCredentialStore implements CredentialStore {
 const credentials = new MirroredCredentialStore();
 const models = createModels({ credentials });
 
-// Register built-in OpenAI (for ChatGPT subscription OAuth) + catalog reference providers
+// Register OpenAI Codex (ChatGPT Plus/Pro OAuth, 500K context) + catalog reference providers
 for (const provider of [
+  openaiCodexProvider(),
   openaiProvider(),
   deepseekProvider(),
   anthropicProvider(),
@@ -90,8 +91,7 @@ for (const provider of [
   models.setProvider(provider);
 }
 
-const OAUTH_PROVIDERS = new Set(["openai"]);
-const SUBSCRIPTION_IDS = new Set(Object.values(OPENAI_CODEX_MODELS).map((m: any) => m.id));
+const OAUTH_PROVIDERS = new Set(["openai-codex"]);
 const DEFAULT_CONTEXT = 128_000;
 const customIds = new Set<string>();
 
@@ -231,10 +231,9 @@ let loginAbort: AbortController | undefined;
 let promptSeq = 0;
 const authPrompts = new Map<string, { resolve: (v: string) => void; reject: (e: unknown) => void }>();
 
-function modelsFor(providerId: string, credentialType?: string) {
+function modelsFor(providerId: string) {
   const list = models
     .getModels(providerId)
-    .filter((m) => !(providerId === "openai" && credentialType === "oauth") || SUBSCRIPTION_IDS.has(m.id))
     .map((m) => ({
       id: m.id,
       name: m.name,
@@ -242,13 +241,13 @@ function modelsFor(providerId: string, credentialType?: string) {
       contextWindow: m.contextWindow,
       input: m.input,
     }));
-  // Catalog is ordered oldest -> newest; show newest flagship ChatGPT models (e.g. gpt-6.2) first
-  return providerId === "openai" && credentialType === "oauth" ? list.reverse() : list;
+  // Catalog is ordered oldest -> newest; show newest flagship ChatGPT Codex models (e.g. gpt-6.2-sol) first
+  return providerId === "openai-codex" ? list.reverse() : list;
 }
 
 async function emitStatus() {
   const infos = await credentials.list();
-  const visibleIds = new Set<string>(["openai", ...customIds]);
+  const visibleIds = new Set<string>(["openai-codex", ...customIds]);
   const providers = models
     .getProviders()
     .filter((p) => visibleIds.has(p.id))
@@ -256,21 +255,25 @@ async function emitStatus() {
       const credType = infos.find((i) => i.providerId === p.id)?.type ?? null;
       return {
         id: p.id,
-        name: p.id === "openai" ? "ChatGPT" : p.name,
+        name: p.id === "openai-codex" ? "ChatGPT Codex" : p.name,
         credential: credType,
         custom: customIds.has(p.id),
         supportsOAuth: OAUTH_PROVIDERS.has(p.id) && !!p.auth.oauth,
-        models: modelsFor(p.id, credType ?? undefined),
+        models: modelsFor(p.id),
       };
     });
   bridge({ type: "status", providers });
 }
 
-const createAuthInteraction = (signal: AbortSignal): AuthInteraction => ({
+const createAuthInteraction = (signal: AbortSignal, preferredMethod?: string): AuthInteraction => ({
   signal,
   notify: (event) => bridge({ type: "auth_event", event }),
-  prompt: (p: AuthPrompt) =>
-    new Promise<string>((resolve, reject) => {
+  prompt: (p: AuthPrompt) => {
+    if (p.type === "select" && preferredMethod) {
+      const match = p.options.find((opt) => opt.id === preferredMethod);
+      if (match) return Promise.resolve(match.id);
+    }
+    return new Promise<string>((resolve, reject) => {
       const id = `p${++promptSeq}`;
       authPrompts.set(id, { resolve, reject });
       const { signal: promptSignal, ...shown } = p;
@@ -282,18 +285,24 @@ const createAuthInteraction = (signal: AbortSignal): AuthInteraction => ({
       };
       promptSignal?.addEventListener("abort", cancel, { once: true });
       signal.addEventListener("abort", cancel, { once: true });
-    }),
+    });
+  },
 });
 
-async function startLogin(provider: string, type: "oauth" | "api_key") {
+async function startLogin(provider: string, type: "oauth" | "api_key", method?: string) {
   loginAbort?.abort();
   const controller = new AbortController();
   loginAbort = controller;
   try {
-    const c = await models.login(provider, type, createAuthInteraction(controller.signal), {
-      getDeviceId: validDeviceId,
-      agentName: "Zai",
-    });
+    const c = await models.login(
+      provider,
+      type,
+      createAuthInteraction(controller.signal, method ?? "browser"),
+      {
+        getDeviceId: validDeviceId,
+        agentName: "pi",
+      },
+    );
     bridge({ type: "login_done", provider, credential: c.type });
   } catch (e: any) {
     bridge({
@@ -434,6 +443,7 @@ async function configureSession(cfg: {
       return undefined;
     },
     transformContext: pruneOldScreens,
+    transport: "sse",
     streamFn: models.streamSimple.bind(models),
   });
 
@@ -519,7 +529,7 @@ const arg = (json: string) => JSON.parse(json);
   login: (json: string) =>
     guard("login", () => {
       const a = arg(json);
-      return startLogin(a.provider, a.type);
+      return startLogin(a.provider, a.type, a.method);
     }),
   cancelLogin: () => loginAbort?.abort(),
   answer: (json: string) => {

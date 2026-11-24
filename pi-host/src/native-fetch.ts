@@ -23,6 +23,23 @@ const fromBase64 = (b64: string): Uint8Array =>
 
 const browserFetch = globalThis.fetch.bind(globalThis);
 
+const collectHeaders = (req: Request, initHeaders?: HeadersInit): Record<string, string> => {
+  const out: Record<string, string> = Object.fromEntries(req.headers.entries());
+  if (!initHeaders) return out;
+  if (initHeaders instanceof Headers) {
+    initHeaders.forEach((v, k) => {
+      out[k] = v;
+    });
+  } else if (Array.isArray(initHeaders)) {
+    for (const [k, v] of initHeaders) out[k] = v;
+  } else {
+    for (const [k, v] of Object.entries(initHeaders)) {
+      if (v !== undefined) out[k] = String(v);
+    }
+  }
+  return out;
+};
+
 export async function nativeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const req = new Request(input, init);
   if (new URL(req.url).origin === location.origin) {
@@ -32,6 +49,7 @@ export async function nativeFetch(input: RequestInfo | URL, init?: RequestInit):
   const body = req.method === "GET" || req.method === "HEAD" ? null : await req.arrayBuffer();
   const signal = init?.signal ?? req.signal;
   signal?.throwIfAborted();
+  const headers = collectHeaders(req, init?.headers);
 
   return new Promise<Response>((resolve, reject) => {
     pending.set(id, { resolve, reject });
@@ -53,7 +71,7 @@ export async function nativeFetch(input: RequestInfo | URL, init?: RequestInit):
       id,
       method: req.method,
       url: req.url,
-      headers: Object.fromEntries(req.headers.entries()),
+      headers,
       body: body && body.byteLength > 0 ? toBase64(body) : null,
     });
   });

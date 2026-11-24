@@ -109,7 +109,7 @@ fun ModelsAndAuthScreen(
     activeModel: ModelOption?,
     authState: AuthUiState,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
-    onStartChatGptLogin: () -> Unit,
+    onStartChatGptLogin: (method: String) -> Unit,
     onCancelLogin: () -> Unit,
     onSubmitAuthPrompt: (promptId: String, value: String) -> Unit,
     onLogoutChatGpt: () -> Unit,
@@ -147,7 +147,7 @@ fun ModelsAndAuthScreen(
         }
     }
 
-    val chatGptProvider = providers.firstOrNull { it.id == "openai" }
+    val chatGptProvider = providers.firstOrNull { it.id == "openai-codex" }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -174,8 +174,8 @@ fun ModelsAndAuthScreen(
                 .navigationBarsPadding(),
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
-            // Section 1: ChatGPT Subscription
-            ZaiPaperGroup(title = "ChatGPT 订阅") {
+            // Section 1: ChatGPT Subscription (OpenAI Codex channel)
+            ZaiPaperGroup(title = "ChatGPT Codex 订阅") {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -194,15 +194,15 @@ fun ModelsAndAuthScreen(
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (signedIn) "已连接 ChatGPT" else "未登录 ChatGPT",
+                                text = if (signedIn) "已连接 ChatGPT Codex" else "未登录 ChatGPT",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                             Text(
                                 text = if (signedIn) {
-                                    "由 Pi 内核自动刷新订阅令牌，凭据加密保存在本机"
+                                    "已接入 Codex 订阅通道，由 Pi 内核自动刷新凭据并加密保存"
                                 } else {
-                                    "通过浏览器授权使用 ChatGPT Plus / Pro 订阅模型"
+                                    "通过 OpenAI Codex 通道使用 ChatGPT Plus / Pro 订阅模型（支持 500K 上下文）"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -307,11 +307,21 @@ fun ModelsAndAuthScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
-                            ZaiPrimaryButton(
-                                text = "重新登录 ChatGPT",
-                                onClick = onStartChatGptLogin,
+                            Row(
                                 modifier = Modifier.fillMaxWidth(),
-                            )
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                ZaiPrimaryButton(
+                                    text = "浏览器重试",
+                                    onClick = { onStartChatGptLogin("browser") },
+                                    modifier = Modifier.weight(1f),
+                                )
+                                ZaiSecondaryButton(
+                                    text = "设备码登录",
+                                    onClick = { onStartChatGptLogin("device_code") },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                         }
 
                         AuthUiState.Idle -> {
@@ -324,22 +334,29 @@ fun ModelsAndAuthScreen(
                                         verticalArrangement = Arrangement.spacedBy(8.dp),
                                     ) {
                                         gptModels.forEach { m ->
-                                            val isCurrent = activeModel?.providerId == "openai" && activeModel.id == m.id
+                                            val isCurrent = activeModel?.providerId == "openai-codex" && activeModel.id == m.id
                                             ZaiSelectPill(
                                                 label = m.id,
                                                 selected = isCurrent,
                                                 monospace = true,
-                                                onClick = { onSelectModel("openai", m.id) },
+                                                onClick = { onSelectModel("openai-codex", m.id) },
                                             )
                                         }
                                     }
                                 }
                             } else {
-                                ZaiPrimaryButton(
-                                    text = "登录 ChatGPT",
-                                    onClick = onStartChatGptLogin,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ZaiPrimaryButton(
+                                        text = "浏览器登录 ChatGPT",
+                                        onClick = { onStartChatGptLogin("browser") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    ZaiSecondaryButton(
+                                        text = "设备码登录（免本地回调）",
+                                        onClick = { onStartChatGptLogin("device_code") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
                             }
                         }
                     }

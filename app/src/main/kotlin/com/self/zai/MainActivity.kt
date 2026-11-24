@@ -199,10 +199,10 @@ private fun ZaiRoot(
                         activeModel = defaultModel,
                         authState = authState,
                         onSelectModel = { pid, mid -> coordinator.selectDefaultModel(pid, mid) },
-                        onStartChatGptLogin = { app.piEngine.startChatGptLogin() },
+                        onStartChatGptLogin = { method -> app.piEngine.startChatGptLogin(method) },
                         onCancelLogin = { app.piEngine.cancelLogin() },
                         onSubmitAuthPrompt = { id, value -> app.piEngine.submitAuthPrompt(id, value) },
-                        onLogoutChatGpt = { app.piEngine.logoutProvider("openai") },
+                        onLogoutChatGpt = { app.piEngine.logoutProvider("openai-codex") },
                         onOpenBrowserUrl = onOpenBrowserUrl,
                         onLookupCatalogMetadata = { ids, cb -> app.piEngine.lookupModels(ids, cb) },
                         onSaveCustomProvider = { existingId, name, baseUrl, apiKey, models, defaultImages ->
