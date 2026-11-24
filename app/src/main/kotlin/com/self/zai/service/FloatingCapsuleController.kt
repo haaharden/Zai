@@ -214,23 +214,23 @@ class FloatingCapsuleController(
         val container = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(7), dp(7), dp(7))
+            setPadding(dp(14), dp(8), dp(8), dp(8))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(24).toFloat()
-                setColor(Color.argb(242, 17, 20, 25))
-                setStroke(dp(1), Color.argb(160, 91, 139, 255))
+                cornerRadius = dp(26).toFloat()
+                setColor(Color.argb(242, 13, 16, 22))
+                setStroke(dp(1), Color.argb(120, 112, 144, 255))
             }
-            elevation = dp(10).toFloat()
+            elevation = dp(12).toFloat()
         }
 
         val pulseDot = View(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.rgb(91, 139, 255))
+                setColor(Color.rgb(112, 144, 255))
             }
-            layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply {
-                marginEnd = dp(8)
+            layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply {
+                marginEnd = dp(9)
             }
         }
 
@@ -285,14 +285,14 @@ class FloatingCapsuleController(
 
         val stopBtn = TextView(context).apply {
             text = "停止"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextColor(Color.rgb(255, 240, 240))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             paint.isFakeBoldText = true
             setPadding(dp(12), dp(6), dp(12), dp(6))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(16).toFloat()
-                setColor(Color.rgb(214, 59, 59))
+                cornerRadius = dp(18).toFloat()
+                setColor(Color.argb(225, 201, 59, 59))
             }
             setOnClickListener { onStopRequested() }
         }
@@ -371,13 +371,13 @@ private class EdgeGlowView(context: Context) : View(context) {
     private val density = context.resources.displayMetrics.density
     private val outerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 8f * density
-        color = Color.argb(65, 91, 139, 255)
+        strokeWidth = 7f * density
+        color = Color.argb(56, 112, 144, 255)
     }
     private val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 2.4f * density
-        color = Color.argb(225, 91, 139, 255)
+        strokeWidth = 2f * density
+        color = Color.argb(210, 112, 144, 255)
     }
     private val rect = RectF()
     private val cornerRadius = 34f * density

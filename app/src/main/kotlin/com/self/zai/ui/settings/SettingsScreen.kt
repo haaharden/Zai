@@ -4,14 +4,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,18 +25,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -58,7 +49,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -72,13 +62,20 @@ import com.self.zai.model.PerceptionMode
 import com.self.zai.model.ThemeMode
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.shell.ShizukuStatus
+import com.self.zai.ui.components.ZaiInsetDivider
+import com.self.zai.ui.components.ZaiPaperGroup
+import com.self.zai.ui.components.ZaiPrimaryButton
+import com.self.zai.ui.components.ZaiSecondaryButton
+import com.self.zai.ui.components.ZaiSegmentedControl
+import com.self.zai.ui.components.ZaiTextField
+import com.self.zai.ui.components.zaiSwitchColors
 import com.self.zai.update.AppUpdater
 import com.self.zai.update.ReleaseUpdateInfo
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
@@ -158,17 +155,17 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .padding(horizontal = 20.dp, vertical = 10.dp)
                 .navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(22.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
-            // 1. Model & Account
-            SettingsGroup(title = "模型与账号") {
+            // 1. Models & Reasoning
+            ZaiPaperGroup(title = "模型与推理") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable(onClick = onOpenModels)
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                        .padding(horizontal = 16.dp, vertical = 15.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
@@ -177,8 +174,9 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
+                        Spacer(Modifier.height(2.dp))
                         Text(
-                            text = activeModel?.let { "当前使用 ${it.providerName} / ${it.id}" } ?: "尚未配置模型",
+                            text = activeModel?.let { "${it.providerName}  ${it.id}" } ?: "尚未配置模型",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -187,49 +185,45 @@ fun SettingsScreen(
                         Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ZaiInsetDivider()
 
                 Column(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
-                        text = "推理思考强度",
+                        text = "思考强度",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("off" to "关闭", "low" to "低", "medium" to "中", "high" to "高").forEach { (key, label) ->
-                            FilterChip(
-                                selected = settings.thinkingLevel == key,
-                                onClick = { onUpdateSettings { it.copy(thinkingLevel = key) } },
-                                label = { Text(label) },
-                            )
-                        }
-                    }
+                    ZaiSegmentedControl(
+                        options = listOf("off" to "关闭", "low" to "低", "medium" to "中", "high" to "高"),
+                        selected = settings.thinkingLevel,
+                        onSelect = { key -> onUpdateSettings { it.copy(thinkingLevel = key) } },
+                    )
                 }
             }
 
-            // 2. Phone Control Channels (Accessibility Primary, Optional Shizuku)
-            SettingsGroup(title = "手机操控通道") {
-                // Accessibility primary row (no Developer Options or Shizuku required)
+            // 2. Phone Control
+            ZaiPaperGroup(title = "手机操控") {
                 val a11yColor = when {
                     accessibilityConnected -> MaterialTheme.colorScheme.secondary
                     a11ySettingOn -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.outline
                 }
                 val a11ySubtitle = when {
-                    accessibilityConnected -> "服务已真实绑定，无需开发者选项或 Shizuku 即可直接控手机"
-                    a11ySettingOn -> "系统开关虽开但服务已脱绑，可一键恢复或在系统设置重开一次"
-                    else -> "开启「Zai 手机操控」即可读屏、点击、滑动和输入文字"
+                    accessibilityConnected -> "已真实绑定，无需开发者选项或 Shizuku 即可直接操控"
+                    a11ySettingOn -> "系统开关开启但服务已脱绑，可一键恢复或重开开关"
+                    else -> "开启「Zai 手机操控」即可读屏、点按、滑动与输入"
                 }
                 val canAutoRepair = !accessibilityConnected && (hasWriteSecure || shizukuStatus.isReady)
                 StatusActionRow(
                     dotColor = a11yColor,
-                    title = "无障碍服务（主力通道）",
+                    title = "无障碍服务",
                     subtitle = a11ySubtitle,
                     actionLabel = if (canAutoRepair) "一键恢复" else "去设置",
                     onAction = {
@@ -237,7 +231,7 @@ fun SettingsScreen(
                             scope.launch {
                                 val res = onRepairAccessibility()
                                 val msg = res.fold(
-                                    onSuccess = { "已自动重新激活无障碍服务" },
+                                    onSuccess = { "已重新激活无障碍服务" },
                                     onFailure = { "自动恢复失败，请手动开启：${it.message}" },
                                 )
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -249,42 +243,40 @@ fun SettingsScreen(
                     },
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ZaiInsetDivider()
 
-                // Permanent zero-Shizuku self-healing permission row
                 val grantCmd = "adb shell pm grant com.self.zai android.permission.WRITE_SECURE_SETTINGS"
                 StatusActionRow(
                     dotColor = if (hasWriteSecure) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
-                    title = "无障碍永久自愈（可选，免 Shizuku）",
+                    title = "免 Shizuku 永久自愈（可选）",
                     subtitle = if (hasWriteSecure) {
-                        "已授予 WRITE_SECURE_SETTINGS，关掉开发者选项与重启手机后依然可自动拉起无障碍"
+                        "已授权，关闭开发者选项与重启手机后依然可自动拉起无障碍"
                     } else {
-                        "若系统偶发关闭无障碍，用电脑执行一次 ADB 授权即可永久自愈，授完即可关闭开发者选项"
+                        "电脑执行一次 ADB 授权即可永久生效，授完即可关闭开发者选项"
                     },
                     actionLabel = if (hasWriteSecure) "已就绪" else "复制命令",
                     onAction = {
                         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         cm.setPrimaryClip(ClipData.newPlainText("Zai ADB", grantCmd))
-                        Toast.makeText(context, "已复制授权命令，在电脑终端执行一次即可", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "已复制授权命令", Toast.LENGTH_SHORT).show()
                     },
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ZaiInsetDivider()
 
-                // Optional Shizuku row
                 val shizukuColor = when {
                     shizukuStatus.isReady -> MaterialTheme.colorScheme.secondary
                     shizukuStatus.binderAlive -> MaterialTheme.colorScheme.tertiary
                     else -> MaterialTheme.colorScheme.outline
                 }
                 val shizukuSubtitle = when {
-                    shizukuStatus.isReady -> "已连接 ${shizukuStatus.identityLabel}，可作为备用点击/截屏通道"
-                    shizukuStatus.binderAlive && !shizukuStatus.permissionGranted -> "检测到 Shizuku 正在运行，可点右侧授权"
-                    else -> "非必需：不装 Shizuku、关掉开发者选项也能完整操控手机"
+                    shizukuStatus.isReady -> "已连接 ${shizukuStatus.identityLabel}，可作为备用点击通道"
+                    shizukuStatus.binderAlive && !shizukuStatus.permissionGranted -> "检测到 Shizuku 正在运行，点右侧授权"
+                    else -> "非必需，不装也能完整操控手机"
                 }
                 StatusActionRow(
                     dotColor = shizukuColor,
-                    title = "Shizuku 增强通道（可选）",
+                    title = "Shizuku 通道（可选）",
                     subtitle = shizukuSubtitle,
                     actionLabel = when {
                         shizukuStatus.isReady -> "测试"
@@ -296,7 +288,7 @@ fun SettingsScreen(
                             shizukuStatus.isReady -> scope.launch {
                                 val res = onTestShizuku()
                                 val msg = res.fold(
-                                    onSuccess = { "Shizuku 响应正常：$it" },
+                                    onSuccess = { "Shizuku 正常：$it" },
                                     onFailure = { "测试失败：${it.message}" },
                                 )
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -307,157 +299,143 @@ fun SettingsScreen(
                     },
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ZaiInsetDivider()
 
                 Column(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    Text("操控模式", style = MaterialTheme.typography.titleSmall)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = settings.channelMode == ControlChannelMode.ACCESSIBILITY_ONLY,
-                            onClick = { onUpdateSettings { it.copy(channelMode = ControlChannelMode.ACCESSIBILITY_ONLY) } },
-                            label = { Text("无障碍模式（免开发者选项）") },
-                        )
-                        FilterChip(
-                            selected = settings.channelMode == ControlChannelMode.SHIZUKU_FIRST,
-                            onClick = { onUpdateSettings { it.copy(channelMode = ControlChannelMode.SHIZUKU_FIRST) } },
-                            label = { Text("Shizuku 优先（可选）") },
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("执行模式", style = MaterialTheme.typography.titleSmall)
+                        ZaiSegmentedControl(
+                            options = listOf(
+                                ControlChannelMode.ACCESSIBILITY_ONLY to "无障碍模式",
+                                ControlChannelMode.SHIZUKU_FIRST to "Shizuku 优先",
+                            ),
+                            selected = settings.channelMode,
+                            onSelect = { m -> onUpdateSettings { it.copy(channelMode = m) } },
                         )
                     }
 
-                    Text("读屏与视觉策略", style = MaterialTheme.typography.titleSmall)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = settings.perceptionMode == PerceptionMode.HYBRID,
-                            onClick = { onUpdateSettings { it.copy(perceptionMode = PerceptionMode.HYBRID) } },
-                            label = { Text("智能混合") },
-                        )
-                        FilterChip(
-                            selected = settings.perceptionMode == PerceptionMode.TREE_ONLY,
-                            onClick = { onUpdateSettings { it.copy(perceptionMode = PerceptionMode.TREE_ONLY) } },
-                            label = { Text("纯控件树") },
-                        )
-                        FilterChip(
-                            selected = settings.perceptionMode == PerceptionMode.ALWAYS_VISION,
-                            onClick = { onUpdateSettings { it.copy(perceptionMode = PerceptionMode.ALWAYS_VISION) } },
-                            label = { Text("总是看标号图") },
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("读屏与视觉策略", style = MaterialTheme.typography.titleSmall)
+                        ZaiSegmentedControl(
+                            options = listOf(
+                                PerceptionMode.HYBRID to "智能混合",
+                                PerceptionMode.TREE_ONLY to "纯控件树",
+                                PerceptionMode.ALWAYS_VISION to "总是看图",
+                            ),
+                            selected = settings.perceptionMode,
+                            onSelect = { m -> onUpdateSettings { it.copy(perceptionMode = m) } },
                         )
                     }
                 }
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-
-                ToggleRow(
-                    title = "无障碍掉线自动恢复",
-                    subtitle = "已授予 WRITE_SECURE_SETTINGS 或连接 Shizuku 时，掉线自动拉起",
-                    checked = settings.autoRestoreAccessibility,
-                    onCheckedChange = { v -> onUpdateSettings { it.copy(autoRestoreAccessibility = v) } },
-                )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ZaiInsetDivider()
                 ToggleRow(
                     title = "操控时显示顶部提示胶囊",
-                    subtitle = "在屏幕顶部显示当前步骤与停止按钮（已开无障碍时免悬浮窗权限，截屏自动避让）",
+                    subtitle = "已开无障碍时免悬浮窗权限，截屏自动避让",
                     checked = settings.showFloatingCapsule,
                     onCheckedChange = { v -> onUpdateSettings { it.copy(showFloatingCapsule = v) } },
                 )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ZaiInsetDivider()
                 ToggleRow(
-                    title = "操控时显示屏幕边缘光边与点击反馈",
-                    subtitle = "操控期间屏幕四周亮起呼吸光边、保持常亮，并在点击落点闪现定位光圈",
+                    title = "屏幕呼吸光边与点击落点",
+                    subtitle = "操控期间屏幕边缘亮起柔光、保持常亮并提示点击位置",
                     checked = settings.showEdgeGlow,
                     onCheckedChange = { v -> onUpdateSettings { it.copy(showEdgeGlow = v) } },
                 )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ZaiInsetDivider()
                 ToggleRow(
                     title = "操控完成后自动返回 Zai",
-                    subtitle = "任务结束后自动切回 Zai 查看结果（被系统拦截时发完成通知提醒）",
+                    subtitle = "任务结束后自动切回 Zai 查看结果",
                     checked = settings.returnToZaiOnFinish,
                     onCheckedChange = { v -> onUpdateSettings { it.copy(returnToZaiOnFinish = v) } },
                 )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ZaiInsetDivider()
+                ToggleRow(
+                    title = "无障碍掉线自动恢复",
+                    subtitle = "已授永久自愈或连着 Shizuku 时自动拉起无障碍",
+                    checked = settings.autoRestoreAccessibility,
+                    onCheckedChange = { v -> onUpdateSettings { it.copy(autoRestoreAccessibility = v) } },
+                )
+                ZaiInsetDivider()
                 ToggleRow(
                     title = "敏感操作前弹窗确认",
-                    subtitle = "遇到支付、转账、卸载和密码框时先暂停询问你",
+                    subtitle = "涉及支付、转账、卸载和密码框时先暂停询问",
                     checked = settings.confirmSensitiveActions,
                     onCheckedChange = { v -> onUpdateSettings { it.copy(confirmSensitiveActions = v) } },
                 )
             }
 
-            // 3. Keep-alive & Xiaomi HyperOS permissions
-            SettingsGroup(
+            // 3. Keep-alive & Xiaomi Permissions
+            ZaiPaperGroup(
                 title = if (DevicePermissionHelper.isXiaomiDevice()) "小米保活与系统权限" else "后台保活与权限",
             ) {
                 StatusActionRow(
-                    dotColor = if (hasOverlay) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
-                    title = "显示悬浮窗",
-                    subtitle = "用于在操作其他应用时显示悬浮停止胶囊",
-                    actionLabel = if (hasOverlay) "已开启" else "去开启",
-                    onAction = { DevicePermissionHelper.openOverlaySettings(context) },
-                )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-                StatusActionRow(
-                    dotColor = if (hasNotification) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
-                    title = "通知权限",
-                    subtitle = "任务执行时保持前台服务运行并提供通知栏停止按钮",
-                    actionLabel = if (hasNotification) "已开启" else "去开启",
-                    onAction = { DevicePermissionHelper.openNotificationSettings(context) },
-                )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-                StatusActionRow(
                     dotColor = if (batteryIgnored) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.tertiary,
                     title = "省电策略：无限制",
-                    subtitle = "防止切到目标应用后系统冻结 Zai 导致任务中断",
+                    subtitle = "防止切到目标应用后系统冻结 Zai",
                     actionLabel = if (batteryIgnored) "已放行" else "去设置",
                     onAction = { DevicePermissionHelper.openBatterySettings(context) },
                 )
+                ZaiInsetDivider()
+                StatusActionRow(
+                    dotColor = if (hasNotification) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
+                    title = "通知权限",
+                    subtitle = "用于前台任务保活与完成提醒",
+                    actionLabel = if (hasNotification) "已开启" else "去开启",
+                    onAction = { DevicePermissionHelper.openNotificationSettings(context) },
+                )
+                ZaiInsetDivider()
+                StatusActionRow(
+                    dotColor = if (hasOverlay) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
+                    title = "显示悬浮窗（可选）",
+                    subtitle = "无障碍未开启时的备用悬浮胶囊权限",
+                    actionLabel = if (hasOverlay) "已开启" else "去开启",
+                    onAction = { DevicePermissionHelper.openOverlaySettings(context) },
+                )
                 if (DevicePermissionHelper.isXiaomiDevice()) {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                    ZaiInsetDivider()
                     StatusActionRow(
                         dotColor = MaterialTheme.colorScheme.primary,
                         title = "小米自启动",
-                        subtitle = "系统私有项，建议开启防止后台进程被澎湃系统回收",
-                        actionLabel = "去设置",
+                        subtitle = "建议开启，防止澎湃系统回收后台服务",
+                        actionLabel = "去检查",
                         onAction = { DevicePermissionHelper.openXiaomiAutoStart(context) },
                     )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                    ZaiInsetDivider()
                     StatusActionRow(
                         dotColor = MaterialTheme.colorScheme.primary,
                         title = "小米后台弹出界面",
-                        subtitle = "在「其他权限」中勾选，改善从后台返回或启动应用体验",
-                        actionLabel = "去设置",
+                        subtitle = "在「其他权限」中勾选，让操控完自动返回更稳定",
+                        actionLabel = "去检查",
                         onAction = { DevicePermissionHelper.openXiaomiOtherPermissions(context) },
                     )
                 }
             }
 
             // 4. Appearance
-            SettingsGroup(title = "外观") {
-                FlowRow(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    listOf(
-                        ThemeMode.SYSTEM to "跟随系统",
-                        ThemeMode.LIGHT to "浅色",
-                        ThemeMode.DARK to "深色",
-                        ThemeMode.AMOLED to "纯黑 OLED",
-                    ).forEach { (mode, label) ->
-                        FilterChip(
-                            selected = settings.themeMode == mode,
-                            onClick = { onUpdateSettings { it.copy(themeMode = mode) } },
-                            label = { Text(label) },
-                        )
-                    }
+            ZaiPaperGroup(title = "外观") {
+                Box(modifier = Modifier.padding(16.dp)) {
+                    ZaiSegmentedControl(
+                        options = listOf(
+                            ThemeMode.SYSTEM to "跟随系统",
+                            ThemeMode.LIGHT to "浅色",
+                            ThemeMode.DARK to "深色",
+                            ThemeMode.AMOLED to "纯黑 OLED",
+                        ),
+                        selected = settings.themeMode,
+                        onSelect = { mode -> onUpdateSettings { it.copy(themeMode = mode) } },
+                    )
                 }
             }
 
-            // 5. GitHub Releases In-App Update & Pi Kernel Hot-Update
-            SettingsGroup(title = "应用更新与内核热更") {
+            // 5. GitHub Releases Updater & Pi Hot-Update
+            ZaiPaperGroup(title = "应用更新与内核热更") {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
@@ -470,11 +448,12 @@ fun SettingsScreen(
                                     MaterialTheme.colorScheme.onSurface
                                 },
                             )
+                            Spacer(Modifier.height(2.dp))
                             Text(
                                 text = if (hotUpdateTag != null) {
-                                    "Pi 内核 ${piVersion.ifBlank { "1.5.1" }}（热更新 $hotUpdateTag）"
+                                    "Pi 内核 ${piVersion.ifBlank { "1.6.0" }}（热更新 $hotUpdateTag）"
                                 } else {
-                                    "Pi 内核 ${piVersion.ifBlank { "1.5.1" }}（随包内置）"
+                                    "Pi 内核 ${piVersion.ifBlank { "1.6.0" }}（随包内置）"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -486,7 +465,7 @@ fun SettingsScreen(
                                 val slug = repoInput.trim()
                                 onUpdateSettings { it.copy(githubUpdateRepo = slug) }
                                 updateChecking = true
-                                updateStatusText = "正在检查 GitHub Release…"
+                                updateStatusText = "正在检查更新…"
                                 scope.launch {
                                     val res = AppUpdater.checkLatestRelease(slug)
                                     updateChecking = false
@@ -507,43 +486,48 @@ fun SettingsScreen(
                         }
                     }
 
-                    OutlinedTextField(
+                    ZaiTextField(
                         value = repoInput,
                         onValueChange = {
                             repoInput = it
                             onUpdateSettings { s -> s.copy(githubUpdateRepo = it.trim()) }
                         },
-                        label = { Text("GitHub 仓库 (owner/repo)") },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        modifier = Modifier.fillMaxWidth(),
+                        label = "GitHub 仓库",
+                        placeholder = "haaharden/Zai",
+                        monospace = true,
                     )
 
                     if (updateBusy) {
-                        LinearProgressIndicator(
-                            progress = { updateProgress },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            text = "下载进度 ${(updateProgress * 100).roundToInt()}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            LinearProgressIndicator(
+                                progress = { updateProgress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(3.dp)
+                                    .clip(CircleShape),
+                            )
+                            Text(
+                                text = "下载进度 ${(updateProgress * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
 
                     val rel = latestRelease
                     if (rel != null) {
                         if (rel.releaseNotes.isNotBlank()) {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                modifier = Modifier.fillMaxWidth(),
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                    .padding(12.dp),
                             ) {
                                 Text(
                                     text = rel.releaseNotes.take(400),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(12.dp),
                                 )
                             }
                         }
@@ -558,7 +542,9 @@ fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Button(
+                                ZaiPrimaryButton(
+                                    text = if (rel.isNewer) "下载并更新 ${rel.tagName} $sizeMb".trim()
+                                    else "重装 ${rel.tagName} $sizeMb".trim(),
                                     enabled = !updateBusy && !updateChecking,
                                     onClick = {
                                         updateBusy = true
@@ -581,20 +567,16 @@ fun SettingsScreen(
                                                     Toast.makeText(context, "拉起安装器失败：${err.message}", Toast.LENGTH_LONG).show()
                                                 }
                                             }.onFailure { err ->
-                                                updateStatusText = err.message ?: "下载 APK 失败"
+                                                updateStatusText = err.message ?: "下载失败"
                                             }
                                         }
                                     },
                                     modifier = Modifier.weight(1f),
-                                ) {
-                                    Text(
-                                        if (rel.isNewer) "下载并更新 ${rel.tagName} $sizeMb".trim()
-                                        else "重装 ${rel.tagName} $sizeMb".trim(),
-                                    )
-                                }
+                                )
 
                                 if (shizukuStatus.isReady) {
-                                    OutlinedButton(
+                                    ZaiSecondaryButton(
+                                        text = "Shizuku 装",
                                         enabled = !updateBusy && !updateChecking,
                                         onClick = {
                                             updateBusy = true
@@ -610,7 +592,7 @@ fun SettingsScreen(
                                                     inst.onSuccess {
                                                         Toast.makeText(context, "Shizuku 安装完成", Toast.LENGTH_SHORT).show()
                                                     }.onFailure { err ->
-                                                        updateStatusText = "Shizuku 安装失败，请改用普通更新：${err.message}"
+                                                        updateStatusText = "Shizuku 安装失败：${err.message}"
                                                     }
                                                 }.onFailure { err ->
                                                     updateBusy = false
@@ -618,15 +600,14 @@ fun SettingsScreen(
                                                 }
                                             }
                                         },
-                                    ) {
-                                        Text("Shizuku 装")
-                                    }
+                                    )
                                 }
                             }
                         }
 
                         if (rel.piHotDownloadUrl.isNotBlank()) {
-                            OutlinedButton(
+                            ZaiSecondaryButton(
+                                text = "免重装热更新 Pi 内核 (${rel.tagName})",
                                 enabled = !updateBusy && !updateChecking,
                                 onClick = {
                                     updateBusy = true
@@ -641,7 +622,7 @@ fun SettingsScreen(
                                         updateBusy = false
                                         res.onSuccess { tag ->
                                             onReloadPiHotUpdate()
-                                            updateStatusText = "Pi 内核已热更新至 $tag（无需重装 APK）"
+                                            updateStatusText = "Pi 内核已热更新至 $tag"
                                             Toast.makeText(context, "Pi 内核热更新生效", Toast.LENGTH_SHORT).show()
                                         }.onFailure { err ->
                                             updateStatusText = err.message ?: "内核热更新失败"
@@ -649,9 +630,7 @@ fun SettingsScreen(
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text("免重装热更新 Pi 内核 (${rel.tagName})")
-                            }
+                            )
                         }
                     }
 
@@ -659,7 +638,7 @@ fun SettingsScreen(
                         TextButton(
                             onClick = {
                                 onResetPiHotUpdate()
-                                Toast.makeText(context, "已恢复为随包内置 Pi 内核", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "已恢复随包内置内核", Toast.LENGTH_SHORT).show()
                             },
                         ) {
                             Text("恢复随包内置内核", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -669,37 +648,12 @@ fun SettingsScreen(
             }
 
             Text(
-                text = "Zai v${BuildConfig.VERSION_NAME}  Pi ${piVersion.ifBlank { "1.5.1" }}",
+                text = "Zai v${BuildConfig.VERSION_NAME}  Pi ${piVersion.ifBlank { "1.6.0" }}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                modifier = Modifier.padding(horizontal = 4.dp),
             )
             Spacer(Modifier.height(16.dp))
-        }
-    }
-}
-
-@Composable
-private fun SettingsGroup(
-    title: String,
-    content: @Composable () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                content()
-            }
         }
     }
 }
@@ -715,12 +669,13 @@ private fun StatusActionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+            .clickable(onClick = onAction)
+            .padding(start = 16.dp, end = 10.dp, top = 13.dp, bottom = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(8.dp)
+                .size(7.dp)
                 .clip(CircleShape)
                 .background(dotColor),
         )
@@ -754,7 +709,8 @@ private fun ToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -763,6 +719,7 @@ private fun ToggleRow(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
             )
+            Spacer(Modifier.height(2.dp))
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
@@ -770,6 +727,10 @@ private fun ToggleRow(
             )
         }
         Spacer(Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = zaiSwitchColors(),
+        )
     }
 }

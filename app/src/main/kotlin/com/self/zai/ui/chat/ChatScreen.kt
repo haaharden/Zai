@@ -8,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +18,6 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -35,20 +35,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -67,11 +66,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.self.zai.model.ActionStep
 import com.self.zai.model.ChatMessage
 import com.self.zai.model.ChatSession
@@ -80,6 +81,8 @@ import com.self.zai.model.ModelOption
 import com.self.zai.model.PendingConfirmation
 import com.self.zai.model.StepState
 import com.self.zai.shell.ShizukuStatus
+import com.self.zai.ui.components.ZaiEmblemMark
+import com.self.zai.ui.components.ZaiInsetDivider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,19 +111,24 @@ fun ChatScreen(
     val listState = rememberLazyListState()
 
     val hasControlChannel = accessibilityConnected || shizukuStatus.isReady
-    val channelColor = when {
-        accessibilityConnected -> MaterialTheme.colorScheme.secondary
-        shizukuStatus.isReady -> MaterialTheme.colorScheme.secondary
-        else -> MaterialTheme.colorScheme.tertiary
+    val channelColor = if (hasControlChannel) {
+        MaterialTheme.colorScheme.secondary
+    } else {
+        MaterialTheme.colorScheme.tertiary
     }
     val channelLabel = when {
         accessibilityConnected && shizukuStatus.isReady -> "无障碍与 Shizuku 已就绪"
         accessibilityConnected -> "无障碍已就绪"
         shizukuStatus.isReady -> "Shizuku 已就绪"
-        else -> "尚未开启无障碍服务"
+        else -> "尚未开启无障碍"
     }
 
-    LaunchedEffect(session.id, session.messages.size, session.messages.lastOrNull()?.steps?.size, session.messages.lastOrNull()?.text?.length) {
+    LaunchedEffect(
+        session.id,
+        session.messages.size,
+        session.messages.lastOrNull()?.steps?.size,
+        session.messages.lastOrNull()?.text?.length,
+    ) {
         if (session.messages.isNotEmpty()) {
             listState.animateScrollToItem(session.messages.lastIndex)
         }
@@ -134,11 +142,11 @@ fun ChatScreen(
             .navigationBarsPadding()
             .imePadding(),
     ) {
-        // Minimal editorial header
+        // Refined editorial top bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 8.dp),
+                .padding(start = 22.dp, end = 16.dp, top = 14.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -149,21 +157,20 @@ fun ChatScreen(
 
             Spacer(Modifier.width(12.dp))
 
-            // Quick model & channel status pill
-            Surface(
-                onClick = onOpenModels,
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.weight(1f, fill = false),
+            // Quiet hairline model selector capsule
+            Box(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
+                    .clickable(onClick = onOpenModels)
+                    .padding(horizontal = 11.dp, vertical = 6.dp),
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
+                            .size(6.dp)
                             .clip(CircleShape)
                             .background(channelColor),
                     )
@@ -174,105 +181,105 @@ fun ChatScreen(
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 155.dp),
+                        modifier = Modifier.widthIn(max = 148.dp),
                     )
                     Spacer(Modifier.width(2.dp))
                     Icon(
                         Icons.Rounded.KeyboardArrowDown,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(15.dp),
                     )
                 }
             }
 
             Spacer(Modifier.weight(1f))
 
-            IconButton(onClick = { showSessionsSheet = true }) {
-                Icon(
-                    Icons.Rounded.History,
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HeaderIconTrigger(
+                    onClick = { showSessionsSheet = true },
                     contentDescription = "会话记录",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(onClick = onOpenSettings) {
-                Box {
+                ) {
                     Icon(
-                        Icons.Rounded.Settings,
-                        contentDescription = "设置",
+                        Icons.Rounded.History,
+                        contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp),
                     )
-                    if (hasNewUpdate) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary),
-                        )
-                    }
+                }
+
+                HeaderIconTrigger(
+                    onClick = onOpenSettings,
+                    contentDescription = "设置",
+                    showBadge = hasNewUpdate,
+                ) {
+                    Icon(
+                        Icons.Rounded.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp),
+                    )
                 }
             }
         }
 
-        // Actionable setup banner only when missing model or control channel
+        // Subtle actionable setup strip when needed (accent left bar, zero boxy alert feel)
         if (activeModel == null || !hasControlChannel) {
             val missingModel = activeModel == null
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                    .padding(horizontal = 22.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                    .clickable { if (missingModel) onOpenModels() else onOpenSettings() }
+                    .padding(start = 12.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (missingModel) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.tertiary,
-                            ),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = if (missingModel) {
-                            "先登录 ChatGPT 或添加供应商密钥"
-                        } else {
-                            "开启无障碍服务后即可控制手机"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = { if (missingModel) onOpenModels() else onOpenSettings() },
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = if (missingModel) "去配置" else "去开启",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                }
+                        .width(3.dp)
+                        .height(16.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (missingModel) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.tertiary,
+                        ),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = if (missingModel) {
+                        "先登录 ChatGPT 或添加供应商密钥"
+                    } else {
+                        "开启无障碍服务后即可控制手机"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = if (missingModel) "去配置" else "去开启",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
         }
 
         // Main conversation canvas
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (session.messages.isEmpty()) {
-                EmptyCanvas(
-                    channelLabel = channelLabel,
-                    piReady = piReady,
+                EditorialEmptyCanvas(
+                    statusLine = buildString {
+                        if (!piReady) {
+                            append("正在启动 Pi 内核")
+                        } else {
+                            append(channelLabel)
+                            if (activeModel != null) append("，当前使用 ${activeModel.id}")
+                        }
+                    },
                     onPickPrompt = { starter ->
                         inputText = ""
                         onSendMessage(starter)
@@ -282,8 +289,8 @@ fun ChatScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp),
+                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(22.dp),
                 ) {
                     items(session.messages, key = { it.id }) { msg ->
                         when (msg.role) {
@@ -292,20 +299,24 @@ fun ChatScreen(
                                 message = msg,
                                 isActiveTurn = isRunning && msg.id == session.messages.lastOrNull()?.id,
                             )
-                            MessageRole.SYSTEM_NOTE -> SystemNoteLine(msg.text)
+                            MessageRole.SYSTEM_NOTE -> Text(
+                                text = msg.text,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
-                    item { Spacer(Modifier.height(12.dp)) }
+                    item { Spacer(Modifier.height(10.dp)) }
                 }
             }
         }
 
-        // Live step bar above composer when active
+        // Quiet live telemetry line right above composer while running
         AnimatedVisibility(visible = isRunning && liveStepLabel.isNotBlank()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 4.dp),
+                    .padding(horizontal = 26.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 PulsingDot(color = MaterialTheme.colorScheme.primary)
@@ -321,7 +332,7 @@ fun ChatScreen(
             }
         }
 
-        // Grounded composer bar
+        // Sculpted floating composer dock
         Surface(
             shape = RoundedCornerShape(26.dp),
             color = MaterialTheme.colorScheme.surface,
@@ -339,13 +350,13 @@ fun ChatScreen(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(vertical = 8.dp),
+                        .padding(vertical = 9.dp),
                 ) {
                     if (inputText.isEmpty()) {
                         Text(
-                            text = if (isRunning) "输入指令随时插话调整方向" else "让 Zai 在手机上做什么",
+                            text = if (isRunning) "输入指令可随时插话调整" else "告诉 Zai 在手机上做什么",
                             style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                         )
                     }
                     BasicTextField(
@@ -362,23 +373,26 @@ fun ChatScreen(
 
                 Spacer(Modifier.width(8.dp))
 
-                if (isRunning && inputText.isBlank()) {
+                if (isRunning) {
                     Surface(
                         onClick = onStopRun,
                         shape = CircleShape,
                         color = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError,
-                        modifier = Modifier.size(40.dp),
+                        modifier = Modifier.size(38.dp),
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 Icons.Rounded.Stop,
                                 contentDescription = "立即停止",
-                                modifier = Modifier.size(20.dp),
+                                modifier = Modifier.size(18.dp),
                             )
                         }
                     }
-                } else {
+                }
+
+                if (!isRunning || inputText.isNotBlank()) {
+                    if (isRunning) Spacer(Modifier.width(6.dp))
                     val canSend = inputText.isNotBlank() && piReady
                     Surface(
                         onClick = {
@@ -390,22 +404,22 @@ fun ChatScreen(
                         },
                         shape = CircleShape,
                         color = if (canSend) {
-                            MaterialTheme.colorScheme.primary
+                            MaterialTheme.colorScheme.onBackground
                         } else {
-                            MaterialTheme.colorScheme.surfaceVariant
+                            MaterialTheme.colorScheme.surfaceContainerLow
                         },
                         contentColor = if (canSend) {
-                            MaterialTheme.colorScheme.onPrimary
+                            MaterialTheme.colorScheme.background
                         } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         },
-                        modifier = Modifier.size(40.dp),
+                        modifier = Modifier.size(38.dp),
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 Icons.Rounded.ArrowUpward,
                                 contentDescription = "发送",
-                                modifier = Modifier.size(20.dp),
+                                modifier = Modifier.size(18.dp),
                             )
                         }
                     }
@@ -414,6 +428,7 @@ fun ChatScreen(
         }
     }
 
+    // Sessions bottom sheet
     if (showSessionsSheet) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
@@ -432,7 +447,7 @@ fun ChatScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "对话",
+                        text = "对话记录",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f),
@@ -443,12 +458,12 @@ fun ChatScreen(
                             onNewSession()
                         },
                     ) {
-                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(17.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("新建对话")
+                        Text("新对话", fontWeight = FontWeight.Medium)
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
                 allSessions.forEachIndexed { idx, item ->
                     val selected = item.id == session.id
                     Row(
@@ -456,8 +471,8 @@ fun ChatScreen(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .background(
-                                if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                                else MaterialTheme.colorScheme.surface,
+                                if (selected) MaterialTheme.colorScheme.surfaceContainerLow
+                                else Color.Transparent,
                             )
                             .clickable {
                                 onSelectSession(item.id)
@@ -466,6 +481,15 @@ fun ChatScreen(
                             .padding(horizontal = 12.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (selected) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                        }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = item.title,
@@ -496,10 +520,10 @@ fun ChatScreen(
                         }
                     }
                     if (idx < allSessions.lastIndex) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                        ZaiInsetDivider()
                     }
                 }
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(22.dp))
             }
         }
     }
@@ -508,6 +532,7 @@ fun ChatScreen(
         AlertDialog(
             onDismissRequest = { onResolveConfirmation(pendingConfirmation.callId, false) },
             containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(20.dp),
             title = {
                 Text(
                     text = pendingConfirmation.title,
@@ -536,16 +561,45 @@ fun ChatScreen(
 }
 
 @Composable
-private fun EmptyCanvas(
-    channelLabel: String,
-    piReady: Boolean,
+private fun HeaderIconTrigger(
+    onClick: () -> Unit,
+    contentDescription: String,
+    showBadge: Boolean = false,
+    icon: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        icon()
+        if (showBadge) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+        }
+    }
+}
+
+@Composable
+private fun EditorialEmptyCanvas(
+    statusLine: String,
     onPickPrompt: (String) -> Unit,
 ) {
     val starters = remember {
         listOf(
-            "打开系统设置，帮我查看当前剩余存储空间",
+            "打开系统设置，查看当前剩余存储空间",
             "打开高德地图，搜索附近的咖啡店",
-            "读取当前屏幕内容，告诉我页面上有哪些按钮",
+            "读取当前屏幕，告诉我上面有哪些按钮",
         )
     }
 
@@ -555,35 +609,60 @@ private fun EmptyCanvas(
             .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.Center,
     ) {
+        ZaiEmblemMark(size = 46.dp)
+
+        Spacer(Modifier.height(20.dp))
+
         Text(
-            text = "交给我来点",
+            text = "你想让手机做什么",
             style = MaterialTheme.typography.displaySmall,
             color = MaterialTheme.colorScheme.onBackground,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
-            text = if (piReady) "$channelLabel，随时可以开始任务" else "正在唤醒 Pi 内核",
+            text = statusLine,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(28.dp))
 
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Spacer(Modifier.height(34.dp))
+
+        // Unboxed editorial hairline starter rows (zero SaaS cards)
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(0.5.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant),
+            )
             starters.forEach { sample ->
-                Surface(
-                    onClick = { onPickPrompt(sample) },
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier.fillMaxWidth(),
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPickPrompt(sample) }
+                        .padding(vertical = 15.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         text = sample,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.88f),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Icon(
+                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(18.dp),
                     )
                 }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(0.5.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
             }
         }
     }
@@ -591,15 +670,26 @@ private fun EmptyCanvas(
 
 @Composable
 private fun UserBubble(text: String) {
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
+    val bubbleBg = if (isDark) Color(0xFF1D2432) else MaterialTheme.colorScheme.onBackground
+    val bubbleFg = if (isDark) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.background
+    val border = if (isDark) BorderStroke(0.5.dp, Color(0xFF2C3649)) else null
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.End,
     ) {
         Surface(
-            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp),
-            color = MaterialTheme.colorScheme.onBackground,
-            contentColor = MaterialTheme.colorScheme.background,
-            modifier = Modifier.widthIn(max = 290.dp),
+            shape = RoundedCornerShape(
+                topStart = 20.dp,
+                topEnd = 20.dp,
+                bottomStart = 20.dp,
+                bottomEnd = 6.dp,
+            ),
+            color = bubbleBg,
+            contentColor = bubbleFg,
+            border = border,
+            modifier = Modifier.widthIn(max = 286.dp),
         ) {
             Text(
                 text = text,
@@ -624,20 +714,19 @@ private fun AssistantTurn(
 
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Optional reasoning toggle
         if (message.thinking.isNotBlank()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(14.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                     ) { thinkingExpanded = !thinkingExpanded }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -664,7 +753,6 @@ private fun AssistantTurn(
             }
         }
 
-        // Signature element: Live Action Rail (true numbered sequence of phone steps)
         if (message.steps.isNotEmpty()) {
             ActionSequenceRail(
                 steps = message.steps,
@@ -673,11 +761,10 @@ private fun AssistantTurn(
             )
         }
 
-        // Editorial prose directly on canvas
         if (message.text.isNotBlank()) {
             Text(
                 text = message.text,
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 25.sp),
                 color = if (message.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground,
             )
         } else if (isActiveTurn && message.steps.isEmpty()) {
@@ -708,16 +795,16 @@ private fun ActionSequenceRail(
     }
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(
             0.5.dp,
-            if (running) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+            if (running) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
             else MaterialTheme.colorScheme.outlineVariant,
         ),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -757,7 +844,7 @@ private fun ActionSequenceRail(
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.width(22.dp),
+                            modifier = Modifier.width(20.dp),
                         ) {
                             StepNodeBadge(index = idx + 1, state = step.state)
                             if (!isLast) {
@@ -790,7 +877,6 @@ private fun ActionSequenceRail(
                                 Text(
                                     text = step.detail,
                                     style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Default,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -810,7 +896,7 @@ private fun StepNodeBadge(index: Int, state: StepState) {
         StepState.RUNNING -> {
             Box(
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(19.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center,
@@ -821,9 +907,9 @@ private fun StepNodeBadge(index: Int, state: StepState) {
         StepState.DONE -> {
             Box(
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(19.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -836,7 +922,7 @@ private fun StepNodeBadge(index: Int, state: StepState) {
         StepState.ERROR -> {
             Box(
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(19.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.error.copy(alpha = 0.14f)),
                 contentAlignment = Alignment.Center,
@@ -853,29 +939,20 @@ private fun StepNodeBadge(index: Int, state: StepState) {
 }
 
 @Composable
-private fun SystemNoteLine(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
-@Composable
-private fun PulsingDot(color: androidx.compose.ui.graphics.Color) {
+private fun PulsingDot(color: Color) {
     val transition = rememberInfiniteTransition(label = "pulse")
     val alpha by transition.animateFloat(
         initialValue = 1f,
-        targetValue = 0.28f,
+        targetValue = 0.25f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 820),
+            animation = tween(durationMillis = 850),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "pulseAlpha",
     )
     Box(
         modifier = Modifier
-            .size(7.dp)
+            .size(6.5.dp)
             .alpha(alpha)
             .clip(CircleShape)
             .background(color),

@@ -2,35 +2,38 @@ package com.self.zai.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Light — Alabaster & Cobalt Ink
-val PaperGround = Color(0xFFF5F6F8)
-val PureSheet = Color(0xFFFFFFFF)
-val PaperSubtle = Color(0xFFEBEEF3)
-val CarbonInk = Color(0xFF111419)
-val SlateMuted = Color(0xFF606875)
-val HairlineLight = Color(0xFFE1E5EC)
-val SignalCobaltLight = Color(0xFF2356E8)
-val CobaltContainerLight = Color(0xFFE6EEFF)
+// Light — Porcelain & Inkstone
+val PorcelainGround = Color(0xFFF6F6F4)
+val PaperSheet = Color(0xFFFFFFFF)
+val PaperTonal = Color(0xFFECEEF1)
+val PaperTonalSoft = Color(0xFFF1F2F5)
+val Inkstone = Color(0xFF14171D)
+val StoneMuted = Color(0xFF6B717D)
+val HairlineLight = Color(0xFFE5E7EC)
+val GlacierIndigoLight = Color(0xFF3355D6)
+val GlacierContainerLight = Color(0xFFEAEFFF)
 
-// Dark — Graphite Instrument
-val GraphiteGround = Color(0xFF0D1014)
-val GraphiteSurface = Color(0xFF151A21)
-val GraphiteSubtle = Color(0xFF1D242E)
-val ChalkInk = Color(0xFFEEF1F6)
-val SteelMuted = Color(0xFF838D9C)
-val HairlineDark = Color(0xFF222A35)
-val SignalCobaltDark = Color(0xFF5B8BFF)
-val CobaltContainerDark = Color(0xFF162547)
+// Dark — Obsidian Silk
+val ObsidianGround = Color(0xFF0B0D11)
+val ObsidianSheet = Color(0xFF13171F)
+val ObsidianTonal = Color(0xFF1C222D)
+val ObsidianTonalSoft = Color(0xFF171C26)
+val MistInk = Color(0xFFF0F2F6)
+val AshMuted = Color(0xFF818A98)
+val HairlineDark = Color(0xFF202632)
+val GlacierIndigoDark = Color(0xFF7090FF)
+val GlacierContainerDark = Color(0xFF192440)
 
-// Pure AMOLED (Xiaomi 13 Ultra LTPO)
+// Pure AMOLED — Xiaomi 13 Ultra LTPO
 val OledGround = Color(0xFF000000)
-val OledSurface = Color(0xFF0E1116)
-val OledSubtle = Color(0xFF171C24)
+val OledSheet = Color(0xFF0D1016)
+val OledTonal = Color(0xFF171C26)
+val HairlineOled = Color(0xFF1C212C)
 
-// Operational Signals
-val LiveEmerald = Color(0xFF149A74)
-val LiveEmeraldDark = Color(0xFF34C79B)
-val CautionAmber = Color(0xFFD08215)
-val CautionAmberDark = Color(0xFFF1AC45)
-val StopCrimson = Color(0xFFD63B3B)
-val StopCrimsonDark = Color(0xFFF06767)
+// Restrained operational signals
+val JadeReadyLight = Color(0xFF1A8C6C)
+val JadeReadyDark = Color(0xFF3CC49B)
+val AmberNoticeLight = Color(0xFFC47A16)
+val AmberNoticeDark = Color(0xFFF0AE48)
+val VermilionStopLight = Color(0xFFC93B3B)
+val VermilionStopDark = Color(0xFFED6B6B)
