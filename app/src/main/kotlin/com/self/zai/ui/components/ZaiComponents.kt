@@ -308,6 +308,77 @@ fun ZaiTextField(
 }
 
 /**
+ * Refined multiline tonal text area for custom system prompts and Skill Markdown bodies.
+ */
+@Composable
+fun ZaiMultilineField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String? = null,
+    placeholder: String = "",
+    monospace: Boolean = false,
+    minLines: Int = 4,
+    maxLines: Int = 10,
+    modifier: Modifier = Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (label != null) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 2.dp),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .border(
+                    width = if (focused) 1.dp else 0.5.dp,
+                    color = if (focused) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                    } else {
+                        MaterialTheme.colorScheme.outlineVariant
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                )
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+        ) {
+            if (value.isEmpty() && placeholder.isNotEmpty()) {
+                Text(
+                    text = placeholder,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = if (monospace) FontFamily.Monospace else FontFamily.SansSerif,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                )
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                minLines = minLines,
+                maxLines = maxLines,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = if (monospace) FontFamily.Monospace else FontFamily.SansSerif,
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { focused = it.isFocused },
+            )
+        }
+    }
+}
+
+/**
  * Primary tactile ink pill button (restrained architectural fill, never screaming neon).
  */
 @Composable

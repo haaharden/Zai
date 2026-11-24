@@ -29,6 +29,8 @@ import androidx.compose.ui.Modifier
 import com.self.zai.di.AppContainer
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.phone.ZaiAccessibilityService
+import com.self.zai.ui.capabilities.McpServersScreen
+import com.self.zai.ui.capabilities.SkillsScreen
 import com.self.zai.ui.chat.ChatScreen
 import com.self.zai.ui.models.ModelsAndAuthScreen
 import com.self.zai.ui.settings.SettingsScreen
@@ -36,7 +38,7 @@ import com.self.zai.ui.theme.ZaiTheme
 import com.self.zai.update.AppUpdater
 import com.self.zai.update.ReleaseUpdateInfo
 
-private enum class OverlayRoute { NONE, MODELS, SETTINGS }
+private enum class OverlayRoute { NONE, MODELS, SETTINGS, SKILLS, MCP }
 
 class MainActivity : ComponentActivity() {
 
@@ -157,10 +159,12 @@ private fun ZaiRoot(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
+        val enabledSkills = remember(settings.skills) { settings.skills.filter { it.enabled } }
         ChatScreen(
             session = activeSession,
             allSessions = sessions,
             providers = providers,
+            enabledSkills = enabledSkills,
             sessionModel = sessionModel,
             sessionThinkingLevel = sessionThinkingLevel,
             piReady = piReady,
@@ -189,7 +193,12 @@ private fun ZaiRoot(
         )
 
         if (route != OverlayRoute.NONE) {
-            BackHandler { route = OverlayRoute.NONE }
+            BackHandler {
+                route = when (route) {
+                    OverlayRoute.SKILLS, OverlayRoute.MCP -> OverlayRoute.SETTINGS
+                    else -> OverlayRoute.NONE
+                }
+            }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -239,6 +248,12 @@ private fun ZaiRoot(
                         onUpdateSettings = { repository.updateSettings(it) },
                         onSelectDefaultModel = { pid, mid -> coordinator.selectDefaultModel(pid, mid) },
                         onSelectDefaultThinking = { lvl -> coordinator.selectDefaultThinkingLevel(lvl) },
+                        onUpdateUserPrompt = { prompt ->
+                            coordinator.updateUserSystemPrompt(prompt)
+                            onShowToast("已更新用户提示词")
+                        },
+                        onOpenSkills = { route = OverlayRoute.SKILLS },
+                        onOpenMcpServers = { route = OverlayRoute.MCP },
                         onOpenModels = { route = OverlayRoute.MODELS },
                         onRequestShizuku = {
                             if (!container.shizukuBridge.requestPermission()) {
@@ -253,6 +268,36 @@ private fun ZaiRoot(
                         onReloadPiHotUpdate = { coordinator.reloadPiEngine(resetToBundled = false) },
                         onResetPiHotUpdate = { coordinator.reloadPiEngine(resetToBundled = true) },
                         onBack = { route = OverlayRoute.NONE },
+                    )
+
+                    OverlayRoute.SKILLS -> SkillsScreen(
+                        skills = settings.skills,
+                        onSaveSkill = { existingId, name, desc, body, enabled ->
+                            coordinator.saveSkill(existingId, name, desc, body, enabled)
+                            onShowToast("已保存技能")
+                        },
+                        onToggleSkill = { id, enabled -> coordinator.toggleSkill(id, enabled) },
+                        onDeleteSkill = { id ->
+                            coordinator.deleteSkill(id)
+                            onShowToast("已删除技能")
+                        },
+                        onBack = { route = OverlayRoute.SETTINGS },
+                    )
+
+                    OverlayRoute.MCP -> McpServersScreen(
+                        servers = settings.mcpServers,
+                        onDiscoverTools = { url, token -> coordinator.discoverMcpTools(url, token) },
+                        onSaveServer = { existingId, name, url, token, tools, enabled ->
+                            coordinator.saveMcpServer(existingId, name, url, token, tools, enabled)
+                            onShowToast("已保存 MCP 服务")
+                        },
+                        onToggleServer = { id, enabled -> coordinator.toggleMcpServer(id, enabled) },
+                        onDeleteServer = { id ->
+                            coordinator.deleteMcpServer(id)
+                            onShowToast("已删除 MCP 服务")
+                        },
+                        onGetAuthToken = { id -> coordinator.getMcpAuthToken(id) },
+                        onBack = { route = OverlayRoute.SETTINGS },
                     )
 
                     OverlayRoute.NONE -> Unit

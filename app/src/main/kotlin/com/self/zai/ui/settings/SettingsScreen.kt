@@ -66,6 +66,7 @@ import com.self.zai.model.ThemeMode
 import com.self.zai.model.ThinkingLevelDisplay
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.shell.ShizukuStatus
+import com.self.zai.ui.capabilities.UserPromptEditorSheet
 import com.self.zai.ui.components.ZaiInsetDivider
 import com.self.zai.ui.components.ZaiModelPickerSheet
 import com.self.zai.ui.components.ZaiPaperGroup
@@ -97,6 +98,9 @@ fun SettingsScreen(
     onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
     onSelectDefaultModel: (providerId: String, modelId: String) -> Unit,
     onSelectDefaultThinking: (String) -> Unit,
+    onUpdateUserPrompt: (String) -> Unit,
+    onOpenSkills: () -> Unit,
+    onOpenMcpServers: () -> Unit,
     onOpenModels: () -> Unit,
     onRequestShizuku: () -> Unit,
     onTestShizuku: suspend () -> Result<String>,
@@ -117,6 +121,7 @@ fun SettingsScreen(
     var hasWriteSecure by remember { mutableStateOf(DevicePermissionHelper.hasWriteSecureSettings(context)) }
     var hasXiaomiBgPopup by remember { mutableStateOf(DevicePermissionHelper.hasXiaomiBgPopupPermission(context)) }
     var showDefaultModelSheet by remember { mutableStateOf(false) }
+    var showUserPromptSheet by remember { mutableStateOf(false) }
 
     var repoInput by remember(settings.githubUpdateRepo) { mutableStateOf(settings.githubUpdateRepo) }
     var updateChecking by remember { mutableStateOf(false) }
@@ -283,7 +288,45 @@ fun SettingsScreen(
                 }
             }
 
-            // 2. Phone Control
+            // 2. User Prompt, Skills & MCP
+            ZaiPaperGroup(title = "提示词、技能与 MCP") {
+                NavigationActionRow(
+                    title = "用户提示词",
+                    subtitle = settings.userSystemPrompt.trim()
+                        .lineSequence().firstOrNull()?.take(48)?.ifBlank { null }
+                        ?: "未设置，可自定义回复风格与偏好，亦可查看内置提示词",
+                    onClick = { showUserPromptSheet = true },
+                )
+
+                ZaiInsetDivider()
+
+                val enabledSkillsCount = settings.skills.count { it.enabled }
+                NavigationActionRow(
+                    title = "Skills 技能",
+                    subtitle = if (settings.skills.isEmpty()) {
+                        "兼容标准 SKILL.md，按需加载不占上下文"
+                    } else {
+                        "已启用 $enabledSkillsCount / ${settings.skills.size} 个技能，支持 /名称 触发"
+                    },
+                    onClick = onOpenSkills,
+                )
+
+                ZaiInsetDivider()
+
+                val enabledServers = settings.mcpServers.filter { it.enabled }
+                val totalMcpTools = enabledServers.sumOf { it.tools.size }
+                NavigationActionRow(
+                    title = "MCP 工具服务",
+                    subtitle = if (settings.mcpServers.isEmpty()) {
+                        "接入远程 Streamable HTTP MCP 扩展外部能力"
+                    } else {
+                        "已启用 ${enabledServers.size} 个服务，共 $totalMcpTools 个工具"
+                    },
+                    onClick = onOpenMcpServers,
+                )
+            }
+
+            // 3. Phone Control
             ZaiPaperGroup(title = "手机操控") {
                 val a11yColor = when {
                     accessibilityConnected -> MaterialTheme.colorScheme.secondary
@@ -750,6 +793,49 @@ fun SettingsScreen(
             onSelect = onSelectDefaultModel,
             onManageProviders = onOpenModels,
             onDismiss = { showDefaultModelSheet = false },
+        )
+    }
+
+    if (showUserPromptSheet) {
+        UserPromptEditorSheet(
+            initialPrompt = settings.userSystemPrompt,
+            onSave = onUpdateUserPrompt,
+            onDismiss = { showUserPromptSheet = false },
+        )
+    }
+}
+
+@Composable
+private fun NavigationActionRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
         )
     }
 }

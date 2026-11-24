@@ -1,18 +1,24 @@
 package com.self.zai.agent
 
+import com.self.zai.data.CredentialVault
 import com.self.zai.data.SessionRepository
+import com.self.zai.mcp.McpToolClient
+import com.self.zai.mcp.StreamableHttpMcpClient
 import com.self.zai.model.ActionStep
 import com.self.zai.model.ChatMessage
 import com.self.zai.model.ChatSession
 import com.self.zai.model.CustomModelEntry
 import com.self.zai.model.CustomProviderConfig
-import com.self.zai.model.ModelOption
+import com.self.zai.model.McpServerConfig
+import com.self.zai.model.McpToolSummary
 import com.self.zai.model.MessageRole
+import com.self.zai.model.ModelOption
+import com.self.zai.model.SkillEntry
 import com.self.zai.model.StepState
 import com.self.zai.phone.PhoneController
-import com.self.zai.phone.PhoneToolCatalog
 import com.self.zai.pi.AgentRuntime
 import com.self.zai.pi.PiSessionEvent
+import com.self.zai.skills.SkillMarkdownParser
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,8 +49,11 @@ interface RunChromeHost {
  */
 class AgentCoordinator(
     private val repository: SessionRepository,
+    private val credentialVault: CredentialVault,
     private val runtime: AgentRuntime,
     val phoneController: PhoneController,
+    val toolDispatcher: AgentToolDispatcher,
+    val mcpClient: McpToolClient,
     val modelSelection: ModelSelectionManager,
     private val returnNavigator: AppReturnNavigator,
     private val chromeHost: RunChromeHost,
@@ -77,7 +86,7 @@ class AgentCoordinator(
         }
 
     init {
-        runtime.toolHandler = phoneController
+        runtime.toolHandler = toolDispatcher
         observePiEvents()
         observeProviders()
     }
@@ -171,6 +180,117 @@ class AgentCoordinator(
 
     fun deleteCustomProvider(providerId: String) = modelSelection.deleteCustomProvider(providerId)
 
+    // --- User System Prompt, Skills & MCP management ---
+
+    fun updateUserSystemPrompt(prompt: String) {
+        repository.updateSettings { it.copy(userSystemPrompt = prompt.trim()) }
+        configuredSessions.clear()
+    }
+
+    fun saveSkill(
+        existingId: String?,
+        name: String,
+        description: String,
+        instructions: String,
+        enabled: Boolean = true,
+    ): SkillEntry {
+        val id = existingId?.takeIf { it.isNotBlank() } ?: "sk_${UUID.randomUUID().toString().take(8)}"
+        val entry = SkillEntry(
+            id = id,
+            name = SkillMarkdownParser.normalizeSkillName(name),
+            description = description.trim().ifBlank { "自定义技能" },
+            instructions = instructions.trim(),
+            enabled = enabled,
+        )
+        repository.updateSettings { cur ->
+            val list = cur.skills.toMutableList()
+            val idx = list.indexOfFirst { it.id == id }
+            if (idx >= 0) list[idx] = entry else list.add(0, entry)
+            cur.copy(skills = list)
+        }
+        configuredSessions.clear()
+        return entry
+    }
+
+    fun toggleSkill(skillId: String, enabled: Boolean) {
+        repository.updateSettings { cur ->
+            cur.copy(skills = cur.skills.map { if (it.id == skillId) it.copy(enabled = enabled) else it })
+        }
+        configuredSessions.clear()
+    }
+
+    fun deleteSkill(skillId: String) {
+        repository.updateSettings { cur ->
+            cur.copy(skills = cur.skills.filterNot { it.id == skillId })
+        }
+        configuredSessions.clear()
+    }
+
+    fun saveMcpServer(
+        existingId: String?,
+        name: String,
+        url: String,
+        authToken: String?,
+        tools: List<McpToolSummary>,
+        enabled: Boolean = true,
+    ): McpServerConfig {
+        val id = existingId?.takeIf { it.isNotBlank() } ?: "mcp_${UUID.randomUUID().toString().take(8)}"
+        val normalizedUrl = StreamableHttpMcpClient.normalizeUrl(url)
+        val cfg = McpServerConfig(
+            id = id,
+            name = name.trim().ifBlank {
+                normalizedUrl.substringAfter("://").substringBefore("/").ifBlank { "MCP 服务" }
+            },
+            url = normalizedUrl,
+            enabled = enabled,
+            tools = tools,
+        )
+        val trimmedToken = authToken?.trim()
+        if (trimmedToken != null) {
+            if (trimmedToken.isEmpty()) {
+                credentialVault.remove(AgentToolDispatcher.mcpAuthKey(id))
+            } else {
+                credentialVault.putString(AgentToolDispatcher.mcpAuthKey(id), trimmedToken)
+            }
+        }
+        mcpClient.invalidateSession(normalizedUrl)
+        repository.updateSettings { cur ->
+            val list = cur.mcpServers.toMutableList()
+            val idx = list.indexOfFirst { it.id == id }
+            if (idx >= 0) list[idx] = cfg else list.add(0, cfg)
+            cur.copy(mcpServers = list)
+        }
+        configuredSessions.clear()
+        return cfg
+    }
+
+    fun toggleMcpServer(serverId: String, enabled: Boolean) {
+        repository.updateSettings { cur ->
+            cur.copy(mcpServers = cur.mcpServers.map { if (it.id == serverId) it.copy(enabled = enabled) else it })
+        }
+        configuredSessions.clear()
+    }
+
+    fun deleteMcpServer(serverId: String) {
+        val existing = repository.settings.value.mcpServers.firstOrNull { it.id == serverId }
+        if (existing != null) mcpClient.invalidateSession(existing.url)
+        credentialVault.remove(AgentToolDispatcher.mcpAuthKey(serverId))
+        repository.updateSettings { cur ->
+            cur.copy(mcpServers = cur.mcpServers.filterNot { it.id == serverId })
+        }
+        configuredSessions.clear()
+    }
+
+    fun getMcpAuthToken(serverId: String): String? =
+        credentialVault.getString(AgentToolDispatcher.mcpAuthKey(serverId))
+
+    suspend fun discoverMcpTools(url: String, authToken: String?): Result<List<McpToolSummary>> =
+        mcpClient.discoverTools(url, authToken)
+
+    fun onNonPhoneToolActivity(label: String) {
+        _liveStepLabel.value = label
+    }
+
     fun onPhoneOperationStep() {
         _liveStepLabel.value = "正在操作手机"
         val s = repository.settings.value
@@ -195,6 +315,24 @@ class AgentCoordinator(
             ?: return Result.failure(IllegalStateException("请先登录 ChatGPT，或添加供应商密钥与模型"))
         val thinking = sessionThinkingLevel(session, model)
         val sessionId = session.id
+        val currentSettings = repository.settings.value
+
+        // Check for explicit `/skill-name` invocation
+        val slashMatch = SkillMarkdownParser.matchSlashInvocation(
+            rawMessage = text,
+            enabledSkills = currentSettings.skills.filter { it.enabled },
+        )
+        val promptForPi = if (slashMatch != null) {
+            buildString {
+                appendLine("请严格按照以下已激活的技能「${slashMatch.skill.name}」指引处理本次请求：")
+                appendLine(slashMatch.skill.instructions)
+                appendLine()
+                append("用户请求：")
+                append(slashMatch.remainingText.ifBlank { "请执行该技能。" })
+            }
+        } else {
+            text
+        }
 
         val userMsg = ChatMessage(
             id = "m_${UUID.randomUUID().toString().take(8)}",
@@ -215,7 +353,7 @@ class AgentCoordinator(
                     messages = s.messages + userMsg,
                 )
             }
-            runtime.prompt(sessionId, text)
+            runtime.prompt(sessionId, promptForPi)
             return Result.success(Unit)
         }
 
@@ -238,15 +376,16 @@ class AgentCoordinator(
         phoneController.resetRunCounters()
         phoneController.currentModelSupportsImages = model.supportsImages
 
-        val configKey = "${model.providerId}/${model.id}/$thinking"
+        val capabilityFingerprint = SystemPromptBuilder.configFingerprint(currentSettings, model.supportsImages)
+        val configKey = "${model.providerId}/${model.id}/$thinking/$capabilityFingerprint"
         if (configuredSessions[sessionId] != configKey) {
             runtime.configureSession(
                 sessionId = sessionId,
                 providerId = model.providerId,
                 modelId = model.id,
                 thinkingLevel = thinking,
-                systemPrompt = PhoneToolCatalog.buildSystemPrompt(model.supportsImages),
-                toolSpecsJson = phoneController.toolRegistry.toolsJson(includeVisionTools = model.supportsImages),
+                systemPrompt = SystemPromptBuilder.build(currentSettings, model.supportsImages),
+                toolSpecsJson = toolDispatcher.buildToolSpecs(currentSettings, includeVisionTools = model.supportsImages),
                 savedMessagesJson = session.piTranscriptJson,
             )
             configuredSessions[sessionId] = configKey
@@ -255,7 +394,7 @@ class AgentCoordinator(
         _isRunning.value = true
         _liveStepLabel.value = "思考中…"
         chromeHost.updateForegroundStatus("正在处理请求")
-        runtime.prompt(sessionId, text)
+        runtime.prompt(sessionId, promptForPi)
         return Result.success(Unit)
     }
 
@@ -371,16 +510,24 @@ class AgentCoordinator(
                     }
 
                     is PiSessionEvent.ToolStart -> {
-                        val label = phoneController.toolRegistry.humanLabel(event.tool, event.args)
-                        _liveStepLabel.value = "正在操作手机"
-                        val step = ActionStep(
-                            id = "st_${UUID.randomUUID().toString().take(6)}",
-                            tool = event.tool,
-                            label = label,
-                            state = StepState.RUNNING,
-                        )
-                        updateLastAssistantMessage(event.sessionId, flushImmediately = false) { msg ->
-                            msg.copy(steps = msg.steps + step)
+                        if (toolDispatcher.isPhoneTool(event.tool)) {
+                            val label = toolDispatcher.humanLabel(event.tool, event.args)
+                            _liveStepLabel.value = "正在操作手机"
+                            val step = ActionStep(
+                                id = "st_${UUID.randomUUID().toString().take(6)}",
+                                tool = event.tool,
+                                label = label,
+                                state = StepState.RUNNING,
+                            )
+                            updateLastAssistantMessage(event.sessionId, flushImmediately = false) { msg ->
+                                msg.copy(steps = msg.steps + step)
+                            }
+                        } else {
+                            _liveStepLabel.value = if (event.tool == AgentToolDispatcher.READ_SKILL_TOOL) {
+                                "正在读取技能…"
+                            } else {
+                                "正在调用 MCP 工具…"
+                            }
                         }
                     }
 

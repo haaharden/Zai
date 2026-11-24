@@ -43,6 +43,31 @@ data class CustomProviderConfig(
 )
 
 @Serializable
+data class McpToolSummary(
+    val name: String,
+    val description: String = "",
+    val inputSchemaJson: String = "{\"type\":\"object\",\"properties\":{}}",
+)
+
+@Serializable
+data class McpServerConfig(
+    val id: String,
+    val name: String,
+    val url: String,
+    val enabled: Boolean = true,
+    val tools: List<McpToolSummary> = emptyList(),
+)
+
+@Serializable
+data class SkillEntry(
+    val id: String,
+    val name: String,
+    val description: String,
+    val instructions: String,
+    val enabled: Boolean = true,
+)
+
+@Serializable
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val channelMode: ControlChannelMode = ControlChannelMode.ACCESSIBILITY_ONLY,
@@ -58,6 +83,9 @@ data class AppSettings(
     val thinkingLevel: String = "off",
     val githubUpdateRepo: String = "haaharden/Zai",
     val customProviders: List<CustomProviderConfig> = emptyList(),
+    val userSystemPrompt: String = "",
+    val skills: List<SkillEntry> = emptyList(),
+    val mcpServers: List<McpServerConfig> = emptyList(),
 )
 
 data class ModelOption(

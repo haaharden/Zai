@@ -78,6 +78,7 @@ import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
 import com.self.zai.model.PendingConfirmation
 import com.self.zai.model.ProviderStatus
+import com.self.zai.model.SkillEntry
 import com.self.zai.model.StepState
 import com.self.zai.model.ThinkingLevelDisplay
 import com.self.zai.shell.ShizukuStatus
@@ -93,6 +94,7 @@ fun ChatScreen(
     session: ChatSession,
     allSessions: List<ChatSession>,
     providers: List<ProviderStatus>,
+    enabledSkills: List<SkillEntry>,
     sessionModel: ModelOption?,
     sessionThinkingLevel: String,
     piReady: Boolean,
@@ -285,6 +287,60 @@ fun ChatScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+        }
+
+        // Quiet inline slash-skill picker when user types `/` in the composer
+        val slashMatches = remember(inputText, enabledSkills) {
+            if (!inputText.startsWith("/") || inputText.contains(" ") || enabledSkills.isEmpty()) {
+                emptyList()
+            } else {
+                val query = inputText.removePrefix("/").trim()
+                enabledSkills.filter {
+                    query.isEmpty() ||
+                        it.name.contains(query, ignoreCase = true) ||
+                        it.description.contains(query, ignoreCase = true)
+                }.take(5)
+            }
+        }
+        AnimatedVisibility(visible = slashMatches.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp)),
+            ) {
+                slashMatches.forEachIndexed { idx, skill ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { inputText = "/${skill.name} " }
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "/${skill.name}",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = skill.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (idx < slashMatches.lastIndex) {
+                        ZaiInsetDivider()
+                    }
+                }
             }
         }
 

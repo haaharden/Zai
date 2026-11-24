@@ -3,16 +3,20 @@ package com.self.zai
 import android.graphics.Bitmap
 import android.graphics.Rect
 import com.self.zai.agent.AgentCoordinator
+import com.self.zai.agent.AgentToolDispatcher
 import com.self.zai.agent.AppReturnNavigator
 import com.self.zai.agent.ModelSelectionManager
 import com.self.zai.agent.RunChromeHost
 import com.self.zai.data.CredentialVault
 import com.self.zai.data.SessionRepository
 import com.self.zai.data.SettingsStore
+import com.self.zai.mcp.McpToolClient
 import com.self.zai.model.AppSettings
 import com.self.zai.model.AuthUiState
 import com.self.zai.model.ChatSession
 import com.self.zai.model.CustomProviderConfig
+import com.self.zai.model.McpServerConfig
+import com.self.zai.model.McpToolSummary
 import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
 import com.self.zai.model.ProviderStatus
@@ -23,6 +27,7 @@ import com.self.zai.phone.channel.PhoneDeviceChannel
 import com.self.zai.pi.AgentRuntime
 import com.self.zai.pi.PiSessionEvent
 import com.self.zai.pi.PiToolHandler
+import com.self.zai.pi.ToolExecutionResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -98,6 +103,13 @@ class AgentCoordinatorTest {
             channel = StubDeviceChannel(),
             appDirectory = StubAppDirectory(),
         )
+        val fakeMcp = StubMcpClient()
+        val dispatcher = AgentToolDispatcher(
+            repository = repo,
+            credentialVault = vault,
+            phoneController = phoneController,
+            mcpClient = fakeMcp,
+        )
 
         lateinit var coordinator: AgentCoordinator
         val modelSelection = ModelSelectionManager(
@@ -108,8 +120,11 @@ class AgentCoordinatorTest {
         )
         coordinator = AgentCoordinator(
             repository = repo,
+            credentialVault = vault,
             runtime = runtime,
             phoneController = phoneController,
+            toolDispatcher = dispatcher,
+            mcpClient = fakeMcp,
             modelSelection = modelSelection,
             returnNavigator = navigator,
             chromeHost = chrome,
@@ -260,6 +275,18 @@ class AgentCoordinatorTest {
         override fun resolveAppLabel(packageName: String) = "设置"
         override fun findLaunchableApp(query: String) = "com.android.settings" to "设置"
         override fun queryLaunchableApps(query: String) = listOf("com.android.settings" to "设置")
+    }
+
+    private class StubMcpClient : McpToolClient {
+        override suspend fun discoverTools(url: String, authToken: String?): Result<List<McpToolSummary>> =
+            Result.success(emptyList())
+        override suspend fun callTool(
+            server: McpServerConfig,
+            authToken: String?,
+            remoteToolName: String,
+            arguments: JSONObject,
+        ): ToolExecutionResult = ToolExecutionResult("ok")
+        override fun invalidateSession(serverUrl: String) {}
     }
 
     private class StubDeviceChannel : PhoneDeviceChannel {

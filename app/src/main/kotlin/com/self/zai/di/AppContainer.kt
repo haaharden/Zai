@@ -3,6 +3,7 @@ package com.self.zai.di
 import android.content.ComponentName
 import android.content.Context
 import com.self.zai.agent.AgentCoordinator
+import com.self.zai.agent.AgentToolDispatcher
 import com.self.zai.agent.AndroidAppReturnNavigator
 import com.self.zai.agent.AppReturnNavigator
 import com.self.zai.agent.ModelSelectionManager
@@ -11,6 +12,8 @@ import com.self.zai.data.CredentialVault
 import com.self.zai.data.SecureStore
 import com.self.zai.data.SessionRepository
 import com.self.zai.data.SettingsStore
+import com.self.zai.mcp.McpToolClient
+import com.self.zai.mcp.StreamableHttpMcpClient
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.phone.AndroidAppDirectory
 import com.self.zai.phone.AppDirectory
@@ -41,18 +44,15 @@ class AppContainer(context: Context) {
     val appDirectory: AppDirectory = AndroidAppDirectory(appContext)
     val toolRegistry: PhoneToolRegistry = PhoneToolRegistry.default()
     val safetyGuard: SafetyGuard = SafetyGuard()
+    val mcpClient: McpToolClient = StreamableHttpMcpClient()
     val returnNavigator: AppReturnNavigator = AndroidAppReturnNavigator(appContext, shizukuBridge)
 
-    lateinit var agentCoordinator: AgentCoordinator
-        private set
+    @Volatile
+    private var coordinatorRef: AgentCoordinator? = null
 
     private val floatingCapsule = FloatingCapsuleController(
         context = appContext,
-        onStopRequested = {
-            if (::agentCoordinator.isInitialized) {
-                agentCoordinator.stopActiveRun()
-            }
-        },
+        onStopRequested = { coordinatorRef?.stopActiveRun() },
     )
 
     private val deviceChannel: PhoneDeviceChannel = AndroidCompositeDeviceChannel(
@@ -100,43 +100,44 @@ class AppContainer(context: Context) {
         appDirectory = appDirectory,
         toolRegistry = toolRegistry,
         safetyGuard = safetyGuard,
-        onStepProgress = { _, _ ->
-            if (::agentCoordinator.isInitialized) {
-                agentCoordinator.onPhoneOperationStep()
-            }
-        },
+        onStepProgress = { _, _ -> coordinatorRef?.onPhoneOperationStep() },
+    )
+
+    val toolDispatcher: AgentToolDispatcher = AgentToolDispatcher(
+        repository = sessionRepository,
+        credentialVault = credentialVault,
+        phoneController = phoneController,
+        mcpClient = mcpClient,
+        onNonPhoneToolActivity = { label -> coordinatorRef?.onNonPhoneToolActivity(label) },
     )
 
     val modelSelectionManager: ModelSelectionManager = ModelSelectionManager(
         repository = sessionRepository,
         credentialVault = credentialVault,
         runtime = agentRuntime,
-        onSessionConfigInvalidated = { sessionId ->
-            if (::agentCoordinator.isInitialized) {
-                agentCoordinator.invalidateSessionConfig(sessionId)
-            }
-        },
+        onSessionConfigInvalidated = { sessionId -> coordinatorRef?.invalidateSessionConfig(sessionId) },
     )
 
-    init {
-        agentCoordinator = AgentCoordinator(
-            repository = sessionRepository,
-            runtime = agentRuntime,
-            phoneController = phoneController,
-            modelSelection = modelSelectionManager,
-            returnNavigator = returnNavigator,
-            chromeHost = chromeHost,
-            onStartRuntimeExtra = { shizukuBridge.register() },
-            onRepairAccessibility = {
-                if (DevicePermissionHelper.hasWriteSecureSettings(appContext)) {
-                    val nativeRes = DevicePermissionHelper.restoreAccessibilityViaSecureSettings(appContext)
-                    if (nativeRes.isSuccess) return@AgentCoordinator nativeRes
-                }
-                val component = ComponentName(appContext, ZaiAccessibilityService::class.java).flattenToString()
-                shizukuBridge.restoreAccessibilityService(component)
-            },
-        )
-    }
+    val agentCoordinator: AgentCoordinator = AgentCoordinator(
+        repository = sessionRepository,
+        credentialVault = credentialVault,
+        runtime = agentRuntime,
+        phoneController = phoneController,
+        toolDispatcher = toolDispatcher,
+        mcpClient = mcpClient,
+        modelSelection = modelSelectionManager,
+        returnNavigator = returnNavigator,
+        chromeHost = chromeHost,
+        onStartRuntimeExtra = { shizukuBridge.register() },
+        onRepairAccessibility = {
+            if (DevicePermissionHelper.hasWriteSecureSettings(appContext)) {
+                val nativeRes = DevicePermissionHelper.restoreAccessibilityViaSecureSettings(appContext)
+                if (nativeRes.isSuccess) return@AgentCoordinator nativeRes
+            }
+            val component = ComponentName(appContext, ZaiAccessibilityService::class.java).flattenToString()
+            shizukuBridge.restoreAccessibilityService(component)
+        },
+    ).also { coordinatorRef = it }
 
     fun startRuntime() {
         agentCoordinator.startRuntime()
