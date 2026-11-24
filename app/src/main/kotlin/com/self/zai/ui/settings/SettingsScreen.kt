@@ -9,6 +9,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -59,14 +61,18 @@ import com.self.zai.model.AppSettings
 import com.self.zai.model.ControlChannelMode
 import com.self.zai.model.ModelOption
 import com.self.zai.model.PerceptionMode
+import com.self.zai.model.ProviderStatus
 import com.self.zai.model.ThemeMode
+import com.self.zai.model.ThinkingLevelDisplay
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.shell.ShizukuStatus
 import com.self.zai.ui.components.ZaiInsetDivider
+import com.self.zai.ui.components.ZaiModelPickerSheet
 import com.self.zai.ui.components.ZaiPaperGroup
 import com.self.zai.ui.components.ZaiPrimaryButton
 import com.self.zai.ui.components.ZaiSecondaryButton
 import com.self.zai.ui.components.ZaiSegmentedControl
+import com.self.zai.ui.components.ZaiSelectPill
 import com.self.zai.ui.components.ZaiTextField
 import com.self.zai.ui.components.zaiSwitchColors
 import com.self.zai.update.AppUpdater
@@ -75,11 +81,13 @@ import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
-    activeModel: ModelOption?,
+    providers: List<ProviderStatus>,
+    defaultModel: ModelOption?,
+    defaultThinkingLevel: String,
     piVersion: String,
     hotUpdateTag: String?,
     latestRelease: ReleaseUpdateInfo?,
@@ -87,6 +95,8 @@ fun SettingsScreen(
     accessibilityConnected: Boolean,
     onReleaseChecked: (ReleaseUpdateInfo?) -> Unit,
     onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
+    onSelectDefaultModel: (providerId: String, modelId: String) -> Unit,
+    onSelectDefaultThinking: (String) -> Unit,
     onOpenModels: () -> Unit,
     onRequestShizuku: () -> Unit,
     onTestShizuku: suspend () -> Result<String>,
@@ -105,6 +115,8 @@ fun SettingsScreen(
     var batteryIgnored by remember { mutableStateOf(DevicePermissionHelper.isIgnoringBatteryOptimizations(context)) }
     var a11ySettingOn by remember { mutableStateOf(DevicePermissionHelper.isAccessibilityEnabledInSettings(context)) }
     var hasWriteSecure by remember { mutableStateOf(DevicePermissionHelper.hasWriteSecureSettings(context)) }
+    var hasXiaomiBgPopup by remember { mutableStateOf(DevicePermissionHelper.hasXiaomiBgPopupPermission(context)) }
+    var showDefaultModelSheet by remember { mutableStateOf(false) }
 
     var repoInput by remember(settings.githubUpdateRepo) { mutableStateOf(settings.githubUpdateRepo) }
     var updateChecking by remember { mutableStateOf(false) }
@@ -128,6 +140,7 @@ fun SettingsScreen(
                 batteryIgnored = DevicePermissionHelper.isIgnoringBatteryOptimizations(context)
                 a11ySettingOn = DevicePermissionHelper.isAccessibilityEnabledInSettings(context)
                 hasWriteSecure = DevicePermissionHelper.hasWriteSecureSettings(context)
+                hasXiaomiBgPopup = DevicePermissionHelper.hasXiaomiBgPopupPermission(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -159,24 +172,62 @@ fun SettingsScreen(
                 .navigationBarsPadding(),
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
-            // 1. Models & Reasoning
-            ZaiPaperGroup(title = "模型与推理") {
+            // 1. Default Model & Dynamic Reasoning Effort
+            ZaiPaperGroup(title = "默认模型与推理") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable(onClick = onOpenModels)
-                        .padding(horizontal = 16.dp, vertical = 15.dp),
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "ChatGPT 与自定义接口",
+                            text = "账号与供应商管理",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        val connectedCount = providers.count { it.isConnected && it.models.isNotEmpty() }
+                        Text(
+                            text = if (connectedCount > 0) {
+                                "已连接 $connectedCount 个渠道，管理 ChatGPT / DeepSeek / OpenRouter"
+                            } else {
+                                "登录 ChatGPT 或配置 DeepSeek、OpenRouter 与自定义接口"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+
+                ZaiInsetDivider()
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            val hasAny = providers.any { it.isConnected && it.models.isNotEmpty() }
+                            if (hasAny) showDefaultModelSheet = true else onOpenModels()
+                        }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "默认模型",
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = activeModel?.let { "${it.providerName}  ${it.id}" } ?: "尚未配置模型",
+                            text = defaultModel?.let { "${it.providerName}  ${it.id}" } ?: "尚未配置模型",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -196,15 +247,39 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
-                        text = "思考强度",
+                        text = "默认思考强度",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    ZaiSegmentedControl(
-                        options = listOf("off" to "关闭", "low" to "低", "medium" to "中", "high" to "高"),
-                        selected = settings.thinkingLevel,
-                        onSelect = { key -> onUpdateSettings { it.copy(thinkingLevel = key) } },
-                    )
+                    if (defaultModel != null && defaultModel.supportsThinkingSelection) {
+                        Text(
+                            text = "以下为 ${defaultModel.id} 实际支持的思考档位，新建对话默认继承",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            defaultModel.thinkingLevels.forEach { level ->
+                                ZaiSelectPill(
+                                    label = ThinkingLevelDisplay.label(level),
+                                    selected = defaultThinkingLevel == level,
+                                    onClick = { onSelectDefaultThinking(level) },
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = if (defaultModel == null) {
+                                "配置默认模型后将按模型实际能力显示可选档位"
+                            } else {
+                                "当前默认模型 ${defaultModel.id} 不支持调节思考强度"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
@@ -405,11 +480,21 @@ fun SettingsScreen(
                         onAction = { DevicePermissionHelper.openXiaomiAutoStart(context) },
                     )
                     ZaiInsetDivider()
+                    val bgPopupColor = when (hasXiaomiBgPopup) {
+                        true -> MaterialTheme.colorScheme.secondary
+                        false -> MaterialTheme.colorScheme.tertiary
+                        null -> MaterialTheme.colorScheme.primary
+                    }
+                    val bgPopupSubtitle = when (hasXiaomiBgPopup) {
+                        true -> "已开启，操控完成后可自动切回 Zai"
+                        false -> "未开启，请在「其他权限」允许以实现自动切回 Zai"
+                        null -> "在「其他权限」中勾选，让操控完自动返回更稳定"
+                    }
                     StatusActionRow(
-                        dotColor = MaterialTheme.colorScheme.primary,
+                        dotColor = bgPopupColor,
                         title = "小米后台弹出界面",
-                        subtitle = "在「其他权限」中勾选，让操控完自动返回更稳定",
-                        actionLabel = "去检查",
+                        subtitle = bgPopupSubtitle,
+                        actionLabel = if (hasXiaomiBgPopup == true) "已开启" else "去开启",
                         onAction = { DevicePermissionHelper.openXiaomiOtherPermissions(context) },
                     )
                 }
@@ -655,6 +740,17 @@ fun SettingsScreen(
             )
             Spacer(Modifier.height(16.dp))
         }
+    }
+
+    if (showDefaultModelSheet) {
+        ZaiModelPickerSheet(
+            title = "选择默认模型",
+            providers = providers,
+            selectedModel = defaultModel,
+            onSelect = onSelectDefaultModel,
+            onManageProviders = onOpenModels,
+            onDismiss = { showDefaultModelSheet = false },
+        )
     }
 }
 

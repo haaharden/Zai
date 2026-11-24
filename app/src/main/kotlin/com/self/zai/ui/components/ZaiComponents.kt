@@ -37,8 +37,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontFamily
@@ -376,11 +374,47 @@ fun ZaiSecondaryButton(
 }
 
 /**
- * Minimal geometric Zai precision touch-ring emblem used quietly in the empty canvas.
+ * Bespoke architectural geometric "Z" monogram with sheared kinetic terminals and a glacier-cobalt focal jewel.
+ */
+@Composable
+fun ZaiMonogramMark(
+    size: Dp = 20.dp,
+    modifier: Modifier = Modifier,
+) {
+    val ink = MaterialTheme.colorScheme.onBackground
+    val spark = MaterialTheme.colorScheme.primary
+
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val path = Path().apply {
+            moveTo(w * 0.14f, h * 0.15f)
+            lineTo(w * 0.75f, h * 0.15f)
+            lineTo(w * 0.75f, h * 0.275f)
+            lineTo(w * 0.30f, h * 0.725f)
+            lineTo(w * 0.73f, h * 0.725f)
+            lineTo(w * 0.67f, h * 0.85f)
+            lineTo(w * 0.08f, h * 0.85f)
+            lineTo(w * 0.08f, h * 0.725f)
+            lineTo(w * 0.53f, h * 0.275f)
+            lineTo(w * 0.085f, h * 0.275f)
+            close()
+        }
+        drawPath(path = path, color = ink)
+        drawCircle(
+            color = spark,
+            radius = w * 0.068f,
+            center = Offset(w * 0.855f, h * 0.786f),
+        )
+    }
+}
+
+/**
+ * Minimal geometric Z precision touch-ring emblem used quietly in the empty canvas.
  */
 @Composable
 fun ZaiEmblemMark(
-    size: Dp = 44.dp,
+    size: Dp = 48.dp,
     modifier: Modifier = Modifier,
 ) {
     val ink = MaterialTheme.colorScheme.onBackground
@@ -396,39 +430,38 @@ fun ZaiEmblemMark(
         // Outer concentric dial hairline
         drawCircle(
             color = ring,
-            radius = w * 0.47f,
+            radius = w * 0.48f,
             center = Offset(cx, cy),
-            style = Stroke(width = w * 0.025f),
+            style = Stroke(width = w * 0.022f),
         )
         drawCircle(
-            color = ring.copy(alpha = 0.55f),
-            radius = w * 0.36f,
+            color = ring.copy(alpha = 0.5f),
+            radius = w * 0.38f,
             center = Offset(cx, cy),
-            style = Stroke(width = w * 0.018f),
+            style = Stroke(width = w * 0.016f),
         )
 
-        // Sculpted geometric Z
+        // Centered sculpted Z monogram scaled cleanly inside the inner dial
+        val inset = w * 0.26f
+        val span = w - inset * 2f
         val path = Path().apply {
-            moveTo(w * 0.33f, h * 0.35f)
-            lineTo(w * 0.65f, h * 0.35f)
-            lineTo(w * 0.35f, h * 0.65f)
-            lineTo(w * 0.67f, h * 0.65f)
+            moveTo(inset + span * 0.14f, inset + span * 0.15f)
+            lineTo(inset + span * 0.75f, inset + span * 0.15f)
+            lineTo(inset + span * 0.75f, inset + span * 0.275f)
+            lineTo(inset + span * 0.30f, inset + span * 0.725f)
+            lineTo(inset + span * 0.73f, inset + span * 0.725f)
+            lineTo(inset + span * 0.67f, inset + span * 0.85f)
+            lineTo(inset + span * 0.08f, inset + span * 0.85f)
+            lineTo(inset + span * 0.08f, inset + span * 0.725f)
+            lineTo(inset + span * 0.53f, inset + span * 0.275f)
+            lineTo(inset + span * 0.085f, inset + span * 0.275f)
+            close()
         }
-        drawPath(
-            path = path,
-            color = ink,
-            style = Stroke(
-                width = w * 0.068f,
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round,
-            ),
-        )
-
-        // Focal touch jewel
+        drawPath(path = path, color = ink)
         drawCircle(
             color = spark,
-            radius = w * 0.055f,
-            center = Offset(w * 0.68f, h * 0.34f),
+            radius = span * 0.07f,
+            center = Offset(inset + span * 0.855f, inset + span * 0.786f),
         )
     }
 }

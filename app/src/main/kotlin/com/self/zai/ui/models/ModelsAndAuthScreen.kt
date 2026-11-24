@@ -640,6 +640,7 @@ private fun CustomProviderEditorSheet(
                                         contextWindow = d.contextWindow ?: meta?.first ?: 128_000,
                                         supportsImages = d.supportsImages ?: meta?.second ?: defaultImages,
                                         reasoning = d.reasoning ?: meta?.third ?: false,
+                                        efforts = d.efforts,
                                         api = apiProtocol,
                                     )
                                 }

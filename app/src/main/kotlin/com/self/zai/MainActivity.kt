@@ -131,8 +131,17 @@ private fun ZaiRoot(
     val activeSession = remember(sessions, activeSessionId) {
         sessions.firstOrNull { it.id == activeSessionId } ?: coordinator.currentSession()
     }
-    val activeModel = remember(providers, settings.activeProviderId, settings.activeModelId) {
-        coordinator.activeModelOption()
+    val defaultModel = remember(providers, settings.activeProviderId, settings.activeModelId) {
+        coordinator.defaultModelOption()
+    }
+    val defaultThinkingLevel = remember(defaultModel, settings.thinkingLevel) {
+        coordinator.defaultThinkingLevel()
+    }
+    val sessionModel = remember(providers, activeSession.providerId, activeSession.modelId, defaultModel) {
+        coordinator.sessionModelOption(activeSession)
+    }
+    val sessionThinkingLevel = remember(sessionModel, activeSession.thinkingLevel, settings.thinkingLevel) {
+        coordinator.sessionThinkingLevel(activeSession, sessionModel)
     }
 
     Box(
@@ -143,7 +152,9 @@ private fun ZaiRoot(
         ChatScreen(
             session = activeSession,
             allSessions = sessions,
-            activeModel = activeModel,
+            providers = providers,
+            sessionModel = sessionModel,
+            sessionThinkingLevel = sessionThinkingLevel,
             piReady = piReady,
             isRunning = isRunning,
             liveStepLabel = liveStepLabel,
@@ -160,6 +171,8 @@ private fun ZaiRoot(
             onSelectSession = { coordinator.selectSession(it) },
             onNewSession = { coordinator.startNewSession() },
             onDeleteSession = { coordinator.deleteSession(it) },
+            onSelectSessionModel = { pid, mid -> coordinator.selectSessionModel(pid, mid) },
+            onSelectSessionThinking = { lvl -> coordinator.selectSessionThinkingLevel(lvl) },
             onOpenModels = { route = OverlayRoute.MODELS },
             onOpenSettings = { route = OverlayRoute.SETTINGS },
             onResolveConfirmation = { callId, allow ->
@@ -183,9 +196,9 @@ private fun ZaiRoot(
                     OverlayRoute.MODELS -> ModelsAndAuthScreen(
                         settings = settings,
                         providers = providers,
-                        activeModel = activeModel,
+                        activeModel = defaultModel,
                         authState = authState,
-                        onSelectModel = { pid, mid -> coordinator.selectModel(pid, mid) },
+                        onSelectModel = { pid, mid -> coordinator.selectDefaultModel(pid, mid) },
                         onStartChatGptLogin = { app.piEngine.startChatGptLogin() },
                         onCancelLogin = { app.piEngine.cancelLogin() },
                         onSubmitAuthPrompt = { id, value -> app.piEngine.submitAuthPrompt(id, value) },
@@ -206,7 +219,9 @@ private fun ZaiRoot(
 
                     OverlayRoute.SETTINGS -> SettingsScreen(
                         settings = settings,
-                        activeModel = activeModel,
+                        providers = providers,
+                        defaultModel = defaultModel,
+                        defaultThinkingLevel = defaultThinkingLevel,
                         piVersion = piVersion,
                         hotUpdateTag = hotUpdateTag,
                         latestRelease = latestRelease,
@@ -214,6 +229,8 @@ private fun ZaiRoot(
                         accessibilityConnected = accessibilityConnected,
                         onReleaseChecked = { latestRelease = it },
                         onUpdateSettings = { app.settingsStore.updateSettings(it) },
+                        onSelectDefaultModel = { pid, mid -> coordinator.selectDefaultModel(pid, mid) },
+                        onSelectDefaultThinking = { lvl -> coordinator.selectDefaultThinkingLevel(lvl) },
                         onOpenModels = { route = OverlayRoute.MODELS },
                         onRequestShizuku = {
                             if (!app.shizukuBridge.requestPermission()) {

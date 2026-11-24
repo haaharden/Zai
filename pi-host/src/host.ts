@@ -23,6 +23,7 @@ import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-code
 import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { googleProvider } from "@earendil-works/pi-ai/providers/google";
+import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
@@ -84,6 +85,7 @@ for (const provider of [
   deepseekProvider(),
   anthropicProvider(),
   googleProvider(),
+  openrouterProvider(),
 ]) {
   models.setProvider(provider);
 }
@@ -98,6 +100,7 @@ interface CustomModelConfig {
   contextWindow?: number;
   images?: boolean;
   reasoning?: boolean;
+  efforts?: string[];
   api?: "openai-completions" | "openai-responses" | "anthropic-messages";
 }
 
@@ -146,6 +149,18 @@ function apiBaseUrl(baseUrl: string, api: string): string {
   return clean;
 }
 
+function thinkingMapFromEfforts(efforts?: string[]) {
+  if (!efforts?.length) return undefined;
+  const set = new Set(efforts.map((e) => e.toLowerCase()));
+  const map: Record<string, string | null> = {
+    off: set.has("none") || set.has("off") ? (set.has("none") ? "none" : null) : null,
+  };
+  for (const lvl of ["minimal", "low", "medium", "high", "xhigh", "max"]) {
+    map[lvl] = set.has(lvl) ? lvl : null;
+  }
+  return map;
+}
+
 function buildCustomProvider(cfg: CustomProviderConfig) {
   return createProvider({
     id: cfg.id,
@@ -156,13 +171,16 @@ function buildCustomProvider(cfg: CustomProviderConfig) {
       const api = m.api ?? "openai-completions";
       const known = catalogModel(m.id);
       const supportsImages = m.images ?? known?.input.includes("image") ?? cfg.images;
+      const customMap = thinkingMapFromEfforts(m.efforts);
+      const reasoning = m.reasoning || !!m.efforts?.length || !!known?.reasoning;
       return {
         id: m.id,
         name: m.id,
         api,
         provider: cfg.id,
         baseUrl: apiBaseUrl(cfg.baseUrl, api),
-        reasoning: m.reasoning ?? !!known?.reasoning,
+        reasoning,
+        thinkingLevelMap: customMap ?? known?.thinkingLevelMap,
         input: supportsImages ? (["text", "image"] as const) : (["text"] as const),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: m.contextWindow || known?.contextWindow || DEFAULT_CONTEXT,

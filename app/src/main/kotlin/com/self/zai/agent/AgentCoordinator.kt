@@ -1,8 +1,12 @@
 package com.self.zai.agent
 
+import android.app.ActivityManager
+import android.app.ActivityOptions
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import com.self.zai.MainActivity
 import com.self.zai.data.SecureStore
 import com.self.zai.data.SettingsStore
@@ -50,25 +54,28 @@ class AgentCoordinator(
 
     @Volatile
     var isAppInForeground: Boolean = true
+        set(value) {
+            field = value
+            if (value && !_isRunning.value) {
+                floatingCapsule.dismiss()
+            }
+        }
 
     val phoneController = PhoneController(
         context = context,
         settingsStore = settingsStore,
         shizuku = shizuku,
         onCapsuleHideForCapture = { hidden -> floatingCapsule.setTemporarilyHidden(hidden) },
-        onStepProgress = { stepNum, stepLabel ->
-            _liveStepLabel.value = stepLabel
+        onStepProgress = { _, _ ->
+            _liveStepLabel.value = "正在操作手机"
             val s = settingsStore.settings.value
             if (s.showFloatingCapsule || s.showEdgeGlow) {
                 floatingCapsule.show(
-                    initialStatus = stepLabel,
-                    stepNumber = stepNum,
                     showCapsule = s.showFloatingCapsule,
                     showEdgeGlow = s.showEdgeGlow,
                 )
-                floatingCapsule.updateStatus(stepLabel, stepNum)
             }
-            ZaiAgentService.startOrUpdate(context, "第 $stepNum 步：$stepLabel")
+            ZaiAgentService.startOrUpdate(context, "正在操作手机")
         },
         onTapMarker = { x, y ->
             if (settingsStore.settings.value.showEdgeGlow || settingsStore.settings.value.showFloatingCapsule) {
@@ -86,7 +93,7 @@ class AgentCoordinator(
     private val _liveStepLabel = MutableStateFlow("")
     val liveStepLabel: StateFlow<String> = _liveStepLabel.asStateFlow()
 
-    private val configuredSessions = HashMap<String, String>() // sessionId -> "provider/model"
+    private val configuredSessions = HashMap<String, String>() // sessionId -> "provider/model/thinking"
 
     init {
         piEngine.toolHandler = phoneController
@@ -112,7 +119,15 @@ class AgentCoordinator(
 
     fun startNewSession(): ChatSession {
         if (_isRunning.value) stopActiveRun()
-        val created = settingsStore.createNewSession()
+        val defModel = defaultModelOption()
+        val defThinking = defModel?.clampThinking(settingsStore.settings.value.thinkingLevel)
+            ?: settingsStore.settings.value.thinkingLevel
+        val created = settingsStore.createNewSession().copy(
+            providerId = defModel?.providerId,
+            modelId = defModel?.id,
+            thinkingLevel = defThinking,
+        )
+        settingsStore.upsertSession(created)
         _activeSessionId.value = created.id
         return created
     }
@@ -134,7 +149,8 @@ class AgentCoordinator(
             .filter { it.isConnected }
             .flatMap { it.models }
 
-    fun activeModelOption(): ModelOption? {
+    /** Global default model used when creating new conversations. */
+    fun defaultModelOption(): ModelOption? {
         val s = settingsStore.settings.value
         val available = allAvailableModels()
         return available.firstOrNull {
@@ -142,11 +158,83 @@ class AgentCoordinator(
         } ?: available.firstOrNull()
     }
 
-    fun selectModel(providerId: String, modelId: String) {
-        settingsStore.updateSettings {
-            it.copy(activeProviderId = providerId, activeModelId = modelId)
+    fun defaultThinkingLevel(): String {
+        val model = defaultModelOption()
+        val saved = settingsStore.settings.value.thinkingLevel
+        return model?.clampThinking(saved) ?: saved
+    }
+
+    /** Active model for the specified conversation (falls back to global default). */
+    fun sessionModelOption(session: ChatSession): ModelOption? {
+        val available = allAvailableModels()
+        if (!session.providerId.isNullOrBlank() && !session.modelId.isNullOrBlank()) {
+            available.firstOrNull {
+                it.providerId == session.providerId && it.id == session.modelId
+            }?.let { return it }
         }
-        configuredSessions.clear()
+        return defaultModelOption()
+    }
+
+    /** Active thinking level for the specified conversation, clamped to the model's real supported levels. */
+    fun sessionThinkingLevel(session: ChatSession, model: ModelOption? = sessionModelOption(session)): String {
+        val raw = session.thinkingLevel ?: settingsStore.settings.value.thinkingLevel
+        return model?.clampThinking(raw) ?: raw
+    }
+
+    /** Changes the global default model (Settings & Models page). */
+    fun selectDefaultModel(providerId: String, modelId: String) {
+        val picked = allAvailableModels().firstOrNull { it.providerId == providerId && it.id == modelId }
+        val clampedThinking = picked?.clampThinking(settingsStore.settings.value.thinkingLevel)
+            ?: settingsStore.settings.value.thinkingLevel
+        settingsStore.updateSettings {
+            it.copy(
+                activeProviderId = providerId,
+                activeModelId = modelId,
+                thinkingLevel = clampedThinking,
+            )
+        }
+        // If current session is still empty, reflect the new default immediately
+        val cur = currentSession()
+        if (cur.messages.isEmpty()) {
+            updateSession(cur.id) {
+                it.copy(providerId = providerId, modelId = modelId, thinkingLevel = clampedThinking)
+            }
+            configuredSessions.remove(cur.id)
+        }
+    }
+
+    /** Changes the global default thinking level (Settings page). */
+    fun selectDefaultThinkingLevel(level: String) {
+        val model = defaultModelOption()
+        val valid = model?.clampThinking(level) ?: level
+        settingsStore.updateSettings { it.copy(thinkingLevel = valid) }
+        val cur = currentSession()
+        if (cur.messages.isEmpty()) {
+            updateSession(cur.id) { it.copy(thinkingLevel = valid) }
+            configuredSessions.remove(cur.id)
+        }
+    }
+
+    /** Changes model for the current conversation only (chat bar above composer). */
+    fun selectSessionModel(providerId: String, modelId: String) {
+        val cur = currentSession()
+        val picked = allAvailableModels().firstOrNull { it.providerId == providerId && it.id == modelId }
+        val nextThinking = picked?.clampThinking(cur.thinkingLevel ?: settingsStore.settings.value.thinkingLevel)
+            ?: cur.thinkingLevel
+            ?: settingsStore.settings.value.thinkingLevel
+        updateSession(cur.id) {
+            it.copy(providerId = providerId, modelId = modelId, thinkingLevel = nextThinking)
+        }
+        configuredSessions.remove(cur.id)
+    }
+
+    /** Changes thinking effort for the current conversation only (chat bar above composer). */
+    fun selectSessionThinkingLevel(level: String) {
+        val cur = currentSession()
+        val model = sessionModelOption(cur)
+        val valid = model?.clampThinking(level) ?: level
+        updateSession(cur.id) { it.copy(thinkingLevel = valid) }
+        configuredSessions.remove(cur.id)
     }
 
     fun saveCustomProvider(
@@ -207,10 +295,10 @@ class AgentCoordinator(
             return Result.failure(IllegalStateException("Pi 引擎正在初始化，请稍候 1 秒再试"))
         }
 
-        val model = activeModelOption()
-            ?: return Result.failure(IllegalStateException("请先登录 ChatGPT，或添加自定义渠道与模型"))
-
         val session = currentSession()
+        val model = sessionModelOption(session)
+            ?: return Result.failure(IllegalStateException("请先登录 ChatGPT，或添加供应商密钥与模型"))
+        val thinking = sessionThinkingLevel(session, model)
         val sessionId = session.id
 
         val userMsg = ChatMessage(
@@ -226,7 +314,6 @@ class AgentCoordinator(
         }
 
         if (_isRunning.value) {
-            // Mid-run steering: Pi injects this user message cleanly after the active tool step
             updateSession(sessionId) { s ->
                 s.copy(
                     updatedAtMs = System.currentTimeMillis(),
@@ -245,6 +332,9 @@ class AgentCoordinator(
         updateSession(sessionId) { s ->
             s.copy(
                 title = updatedTitle,
+                providerId = model.providerId,
+                modelId = model.id,
+                thinkingLevel = thinking,
                 updatedAtMs = System.currentTimeMillis(),
                 messages = s.messages + userMsg + assistantPlaceholder,
             )
@@ -253,13 +343,13 @@ class AgentCoordinator(
         phoneController.resetRunCounters()
         phoneController.currentModelSupportsImages = model.supportsImages
 
-        val configKey = "${model.providerId}/${model.id}/${settingsStore.settings.value.thinkingLevel}"
+        val configKey = "${model.providerId}/${model.id}/$thinking"
         if (configuredSessions[sessionId] != configKey) {
             piEngine.configureSession(
                 sessionId = sessionId,
                 providerId = model.providerId,
                 modelId = model.id,
-                thinkingLevel = settingsStore.settings.value.thinkingLevel,
+                thinkingLevel = thinking,
                 systemPrompt = PhoneToolCatalog.buildSystemPrompt(model.supportsImages),
                 toolSpecsJson = PhoneToolCatalog.toolsJson(includeScreenshot = model.supportsImages),
                 savedMessagesJson = session.piTranscriptJson,
@@ -269,7 +359,7 @@ class AgentCoordinator(
 
         _isRunning.value = true
         _liveStepLabel.value = "思考中…"
-        ZaiAgentService.startOrUpdate(context, "正在处理：$updatedTitle")
+        ZaiAgentService.startOrUpdate(context, "正在处理请求")
 
         piEngine.prompt(sessionId, text)
         return Result.success(Unit)
@@ -279,7 +369,10 @@ class AgentCoordinator(
         val sessionId = _activeSessionId.value
         phoneController.clearPendingConfirmations()
         piEngine.abort(sessionId)
-        finishRunUiState()
+        _isRunning.value = false
+        _liveStepLabel.value = ""
+        floatingCapsule.dismiss()
+        ZaiAgentService.stop(context)
         updateLastAssistantMessage(sessionId) { msg ->
             val closedSteps = msg.steps.map {
                 if (it.state == StepState.RUNNING) it.copy(state = StepState.ERROR, detail = "已停止") else it
@@ -306,57 +399,109 @@ class AgentCoordinator(
 
     private fun finishRunUiState(allowAutoReturn: Boolean = false, sessionId: String? = null) {
         val operated = phoneController.didOperatePhoneThisRun()
+        val shouldReturn = allowAutoReturn &&
+            operated &&
+            settingsStore.settings.value.returnToZaiOnFinish &&
+            !isAppInForeground
+
         _isRunning.value = false
         _liveStepLabel.value = ""
-        floatingCapsule.dismiss()
-        ZaiAgentService.stop(context)
 
-        if (allowAutoReturn && operated && settingsStore.settings.value.returnToZaiOnFinish && !isAppInForeground) {
-            val summary = sessionId?.let { id ->
-                settingsStore.sessions.value.firstOrNull { it.id == id }
-                    ?.messages?.lastOrNull { it.role == MessageRole.ASSISTANT }
-                    ?.text?.lineSequence()?.firstOrNull()?.take(60)
-            }.orEmpty()
-            returnToZaiAsync(summary)
+        if (!shouldReturn) {
+            floatingCapsule.dismiss()
+            ZaiAgentService.stop(context)
+            return
         }
+
+        val summary = sessionId?.let { id ->
+            settingsStore.sessions.value.firstOrNull { it.id == id }
+                ?.messages?.lastOrNull { it.role == MessageRole.ASSISTANT }
+                ?.text?.lineSequence()?.firstOrNull()?.take(50)
+        }.orEmpty()
+
+        // IMPORTANT: Trigger bring-to-front BEFORE dismissing the visible Accessibility overlay
+        // and BEFORE stopping ZaiAgentService so Android 14+ BAL sees an active foreground process.
+        returnToZaiBeforeTeardown(summary)
     }
 
-    private fun returnToZaiAsync(summary: String) {
+    private fun returnToZaiBeforeTeardown(summary: String) {
         scope.launch {
-            delay(250L)
-            if (isAppInForeground) return@launch
-
-            val intent = Intent(context, MainActivity::class.java).apply {
+            val launchIntent = Intent(context, MainActivity::class.java).apply {
                 addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_SINGLE_TOP or
                         Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
                 )
             }
+            val launcherIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                )
+            } ?: launchIntent
 
-            // 1. AccessibilityService context has elevated background-launch privilege on Android/HyperOS
-            val a11yLaunched = ZaiAccessibilityService.instance?.let { svc ->
-                runCatching {
-                    svc.startActivity(intent)
-                    true
-                }.getOrDefault(false)
-            } ?: false
+            // Attempt 1: Move existing Zai task to front + launch via AccessibilityService / active FGS
+            runCatching {
+                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                am.appTasks.firstOrNull()?.moveToFront()
+            }
+            ZaiAccessibilityService.instance?.let { svc ->
+                runCatching { svc.startActivity(launchIntent) }
+            }
+            ZaiAgentService.instance?.let { svc ->
+                runCatching { svc.startActivity(launchIntent) }
+            }
+            runCatching { context.startActivity(launchIntent) }
 
-            if (!a11yLaunched) {
-                runCatching { context.startActivity(intent) }
+            delay(360L)
+            if (isAppInForeground) {
+                floatingCapsule.dismiss()
+                ZaiAgentService.stop(context)
+                return@launch
             }
 
-            delay(450L)
-            if (isAppInForeground) return@launch
+            // Attempt 2: PendingIntent with explicit Android 14+ BAL allow flag
+            runCatching {
+                val pi = PendingIntent.getActivity(
+                    context,
+                    902,
+                    launcherIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val opts = ActivityOptions.makeBasic()
+                        .setPendingIntentBackgroundActivityStartMode(
+                            ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+                        )
+                    pi.send(context, 0, null, null, null, null, opts.toBundle())
+                } else {
+                    pi.send()
+                }
+            }
 
-            // 2. Fallback via Shizuku if connected
+            delay(360L)
+            if (isAppInForeground) {
+                floatingCapsule.dismiss()
+                ZaiAgentService.stop(context)
+                return@launch
+            }
+
+            // Attempt 3: Shizuku shell am start if connected
             if (shizuku.status.value.isReady) {
                 shizuku.exec("am start -n ${context.packageName}/${MainActivity::class.java.name}", 4_000)
-                delay(400L)
-                if (isAppInForeground) return@launch
+                delay(360L)
+                if (isAppInForeground) {
+                    floatingCapsule.dismiss()
+                    ZaiAgentService.stop(context)
+                    return@launch
+                }
             }
 
-            // 3. Last-resort heads-up notification so user can tap straight back
+            // Attempt 4 (OEM blocked background popup, e.g. Xiaomi "后台弹出界面" disabled):
+            // Stop FGS, remove edge glow, keep a minimal clickable Accessibility pill + notification.
+            ZaiAgentService.stop(context)
+            floatingCapsule.showCompletedBanner()
             ZaiAgentService.postTaskFinishedFallback(context, summary)
         }
     }
@@ -364,20 +509,27 @@ class AgentCoordinator(
     private fun observeProviders() {
         scope.launch {
             piEngine.providers.collect { list ->
-                ensureValidActiveModel(list)
+                ensureValidDefaultModel(list)
             }
         }
     }
 
-    private fun ensureValidActiveModel(providers: List<ProviderStatus>) {
+    private fun ensureValidDefaultModel(providers: List<ProviderStatus>) {
         val available = providers.filter { it.isConnected }.flatMap { it.models }
         if (available.isEmpty()) return
         val cur = settingsStore.settings.value
-        val exists = available.any { it.providerId == cur.activeProviderId && it.id == cur.activeModelId }
-        if (!exists) {
-            val pick = available.first()
+        val currentModel = available.firstOrNull {
+            it.providerId == cur.activeProviderId && it.id == cur.activeModelId
+        }
+        val target = currentModel ?: available.first()
+        val clampedThinking = target.clampThinking(cur.thinkingLevel)
+        if (currentModel == null || clampedThinking != cur.thinkingLevel) {
             settingsStore.updateSettings {
-                it.copy(activeProviderId = pick.providerId, activeModelId = pick.id)
+                it.copy(
+                    activeProviderId = target.providerId,
+                    activeModelId = target.id,
+                    thinkingLevel = clampedThinking,
+                )
             }
         }
     }
@@ -408,7 +560,7 @@ class AgentCoordinator(
 
                     is PiSessionEvent.ToolStart -> {
                         val label = PhoneToolCatalog.humanLabel(event.tool, event.args)
-                        _liveStepLabel.value = label
+                        _liveStepLabel.value = "正在操作手机"
                         val step = ActionStep(
                             id = "st_${UUID.randomUUID().toString().take(6)}",
                             tool = event.tool,

@@ -1,6 +1,7 @@
 package com.self.zai.service
 
 import android.animation.ValueAnimator
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Canvas
@@ -13,7 +14,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -27,9 +27,9 @@ import com.self.zai.phone.ZaiAccessibilityService
 import kotlin.math.abs
 
 /**
- * Live visual indicator shown across apps while Zai operates the phone:
- * 1. Full-screen breathing cobalt edge frame (non-touchable, keeps screen awake during runs).
- * 2. Top draggable control capsule showing live step + count + one-tap Stop button.
+ * Minimal, unobtrusive visual indicator shown across apps while Zai operates the phone:
+ * 1. Full-screen breathing glacier-blue edge frame (non-touchable, keeps screen awake).
+ * 2. Compact top draggable pill showing simply "正在操作手机" + one-tap Stop button.
  * 3. Brief tap-point ripple marker when Zai clicks a coordinate.
  *
  * Uses TYPE_ACCESSIBILITY_OVERLAY when AccessibilityService is bound (requires zero overlay permission),
@@ -47,27 +47,30 @@ class FloatingCapsuleController(
 
     private var edgeGlowView: EdgeGlowView? = null
     private var capsuleView: LinearLayout? = null
-    private var stepCounterView: TextView? = null
-    private var statusTextView: TextView? = null
+    private var labelView: TextView? = null
+    private var stopButtonView: TextView? = null
+    private var dotView: View? = null
+    private var dotAnimator: ValueAnimator? = null
+    private var autoDismissRunnable: Runnable? = null
     private var active = false
+    private var showingCompletedBanner = false
     private var showCapsuleEnabled = true
     private var showEdgeEnabled = true
 
     fun show(
-        initialStatus: String,
-        stepNumber: Int = 1,
         showCapsule: Boolean = true,
         showEdgeGlow: Boolean = true,
     ) {
         mainHandler.post {
+            cancelAutoDismiss()
             active = true
+            showingCompletedBanner = false
             showCapsuleEnabled = showCapsule
             showEdgeEnabled = showEdgeGlow
 
             val resolved = resolveWindowHost() ?: return@post
             val (wm, winType) = resolved
 
-            // If window host/type changed (e.g. Accessibility just connected), recreate cleanly
             if (activeWm !== wm || activeWindowType != winType) {
                 detachAllInternal()
                 activeWm = wm
@@ -79,9 +82,9 @@ class FloatingCapsuleController(
             }
             if (showCapsuleEnabled) {
                 if (capsuleView == null) {
-                    attachCapsule(wm, winType, initialStatus, stepNumber)
+                    attachCapsule(wm, winType)
                 } else {
-                    updateTextInternal(initialStatus, stepNumber)
+                    applyRunningChrome()
                     capsuleView?.visibility = View.VISIBLE
                 }
             }
@@ -89,16 +92,52 @@ class FloatingCapsuleController(
         }
     }
 
-    fun updateStatus(text: String, stepNumber: Int) {
+    /**
+     * When background auto-return is blocked by OEM rules (e.g. Xiaomi "后台弹出界面" disabled),
+     * turns the top Accessibility pill into a calm clickable banner so one real tap returns to Zai.
+     */
+    fun showCompletedBanner(autoDismissMs: Long = 10_000L) {
         mainHandler.post {
-            if (!active) return@post
-            updateTextInternal(text, stepNumber)
+            cancelAutoDismiss()
+            val resolved = resolveWindowHost() ?: return@post
+            val (wm, winType) = resolved
+            active = true
+            showingCompletedBanner = true
+            showEdgeEnabled = false
+            edgeGlowView?.let { v ->
+                v.stopPulse()
+                runCatching { activeWm?.removeViewImmediate(v) }
+            }
+            edgeGlowView = null
+
+            if (activeWm !== wm || activeWindowType != winType) {
+                detachAllInternal()
+                activeWm = wm
+                activeWindowType = winType
+            }
+
+            if (capsuleView == null) {
+                attachCapsule(wm, winType)
+            }
+            stopDotPulse()
+            dotView?.alpha = 1f
+            dotView?.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.rgb(60, 196, 155))
+            }
+            labelView?.text = "已完成，点此返回"
+            stopButtonView?.visibility = View.GONE
+            capsuleView?.visibility = View.VISIBLE
+
+            val task = Runnable { dismiss() }
+            autoDismissRunnable = task
+            mainHandler.postDelayed(task, autoDismissMs)
         }
     }
 
     fun showTapMarker(x: Int, y: Int) {
         mainHandler.post {
-            if (!active) return@post
+            if (!active || showingCompletedBanner) return@post
             val (wm, winType) = resolveWindowHost() ?: return@post
             val density = context.resources.displayMetrics.density
             val sizePx = (72 * density).toInt()
@@ -142,12 +181,47 @@ class FloatingCapsuleController(
 
     fun dismiss() {
         mainHandler.post {
+            cancelAutoDismiss()
             active = false
+            showingCompletedBanner = false
             detachAllInternal()
         }
     }
 
+    private fun cancelAutoDismiss() {
+        autoDismissRunnable?.let { mainHandler.removeCallbacks(it) }
+        autoDismissRunnable = null
+    }
+
+    private fun applyRunningChrome() {
+        dotView?.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.rgb(112, 144, 255))
+        }
+        startDotPulse()
+        labelView?.text = "正在操作手机"
+        stopButtonView?.visibility = View.VISIBLE
+    }
+
+    private fun startDotPulse() {
+        val target = dotView ?: return
+        dotAnimator?.cancel()
+        dotAnimator = ValueAnimator.ofFloat(1f, 0.28f).apply {
+            duration = 820L
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            addUpdateListener { target.alpha = it.animatedValue as Float }
+            start()
+        }
+    }
+
+    private fun stopDotPulse() {
+        dotAnimator?.cancel()
+        dotAnimator = null
+    }
+
     private fun detachAllInternal() {
+        stopDotPulse()
         val wm = activeWm
         edgeGlowView?.let { v ->
             v.stopPulse()
@@ -158,28 +232,22 @@ class FloatingCapsuleController(
         }
         edgeGlowView = null
         capsuleView = null
-        stepCounterView = null
-        statusTextView = null
+        labelView = null
+        stopButtonView = null
+        dotView = null
     }
 
     private fun resolveWindowHost(): Pair<WindowManager, Int>? {
-        // 1. Prefer Accessibility overlay: works immediately with zero extra overlay permission!
         val a11y = ZaiAccessibilityService.instance
         if (a11y != null) {
             val wm = a11y.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
             if (wm != null) return wm to WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
         }
-        // 2. Fallback to standard overlay permission when granted
         if (Settings.canDrawOverlays(context)) {
             val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
             if (wm != null) return wm to WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         }
         return null
-    }
-
-    private fun updateTextInternal(text: String, stepNumber: Int) {
-        statusTextView?.text = text
-        stepCounterView?.text = if (stepNumber > 0) "第 $stepNumber 步" else "操控中"
     }
 
     private fun attachEdgeGlow(wm: WindowManager, winType: Int) {
@@ -207,7 +275,7 @@ class FloatingCapsuleController(
         }
     }
 
-    private fun attachCapsule(wm: WindowManager, winType: Int, initialStatus: String, stepNumber: Int) {
+    private fun attachCapsule(wm: WindowManager, winType: Int) {
         val density = context.resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
 
@@ -217,11 +285,11 @@ class FloatingCapsuleController(
             setPadding(dp(14), dp(8), dp(8), dp(8))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(26).toFloat()
-                setColor(Color.argb(242, 13, 16, 22))
-                setStroke(dp(1), Color.argb(120, 112, 144, 255))
+                cornerRadius = dp(24).toFloat()
+                setColor(Color.argb(238, 14, 17, 23))
+                setStroke(dp(1), Color.argb(110, 112, 144, 255))
             }
-            elevation = dp(12).toFloat()
+            elevation = dp(10).toFloat()
         }
 
         val pulseDot = View(context).apply {
@@ -234,71 +302,35 @@ class FloatingCapsuleController(
             }
         }
 
-        val textColumn = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                marginEnd = dp(10)
-            }
-        }
-
-        val headerRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        val brandTag = TextView(context).apply {
-            text = "Zai 正在操控"
-            setTextColor(Color.rgb(154, 186, 255))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+        val statusLabel = TextView(context).apply {
+            text = "正在操作手机"
+            setTextColor(Color.rgb(242, 245, 250))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             paint.isFakeBoldText = true
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply {
-                marginEnd = dp(6)
+                marginEnd = dp(12)
             }
         }
-
-        val stepBadge = TextView(context).apply {
-            text = if (stepNumber > 0) "第 $stepNumber 步" else "操控中"
-            setTextColor(Color.rgb(160, 170, 185))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
-        }
-
-        headerRow.addView(brandTag)
-        headerRow.addView(stepBadge)
-
-        val statusLabel = TextView(context).apply {
-            text = initialStatus
-            setTextColor(Color.rgb(242, 245, 250))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            maxLines = 1
-            maxWidth = dp(185)
-            ellipsize = TextUtils.TruncateAt.END
-        }
-
-        textColumn.addView(headerRow)
-        textColumn.addView(statusLabel)
 
         val stopBtn = TextView(context).apply {
             text = "停止"
-            setTextColor(Color.rgb(255, 240, 240))
+            setTextColor(Color.rgb(255, 242, 242))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             paint.isFakeBoldText = true
-            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setPadding(dp(11), dp(5), dp(11), dp(5))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(18).toFloat()
+                cornerRadius = dp(16).toFloat()
                 setColor(Color.argb(225, 201, 59, 59))
             }
             setOnClickListener { onStopRequested() }
         }
 
         container.addView(pulseDot)
-        container.addView(textColumn)
+        container.addView(statusLabel)
         container.addView(stopBtn)
 
         val statusBarHeight = getStatusBarHeightPx()
@@ -342,10 +374,21 @@ class FloatingCapsuleController(
                 MotionEvent.ACTION_UP -> {
                     if (!moved) {
                         val openIntent = Intent(context, MainActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                            addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                            )
+                        }
+                        runCatching {
+                            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                            am.appTasks.firstOrNull()?.moveToFront()
                         }
                         val hostCtx = ZaiAccessibilityService.instance ?: context
                         runCatching { hostCtx.startActivity(openIntent) }
+                        if (showingCompletedBanner) {
+                            dismiss()
+                        }
                     }
                     true
                 }
@@ -356,8 +399,10 @@ class FloatingCapsuleController(
         runCatching {
             wm.addView(container, params)
             capsuleView = container
-            stepCounterView = stepBadge
-            statusTextView = statusLabel
+            labelView = statusLabel
+            stopButtonView = stopBtn
+            dotView = pulseDot
+            startDotPulse()
         }
     }
 

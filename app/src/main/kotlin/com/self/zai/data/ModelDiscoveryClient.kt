@@ -21,6 +21,7 @@ data class DiscoveredModel(
     val contextWindow: Int? = null,
     val supportsImages: Boolean? = null,
     val reasoning: Boolean? = null,
+    val efforts: List<String> = emptyList(),
 )
 
 data class ModelDiscoveryResult(
@@ -147,7 +148,8 @@ object ModelDiscoveryClient {
                         ?: item["context_window"]?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }
                         ?: item["max_model_len"]?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }
                     val vision = detectVisionHint(id, item)
-                    val reasoning = detectReasoningHint(id, item)
+                    val efforts = extractReasoningEfforts(item)
+                    val reasoning = detectReasoningHint(id, item) ?: (efforts.isNotEmpty()).takeIf { it }
                     out.putIfAbsent(
                         id,
                         DiscoveredModel(
@@ -155,6 +157,7 @@ object ModelDiscoveryClient {
                             contextWindow = ctx,
                             supportsImages = vision,
                             reasoning = reasoning,
+                            efforts = efforts,
                         ),
                     )
                 }
@@ -186,9 +189,26 @@ object ModelDiscoveryClient {
         }
     }
 
+    private fun extractReasoningEfforts(obj: JsonObject): List<String> {
+        val raw = (obj["reasoning_levels"] as? JsonArray)
+            ?: (obj["reasoning_efforts"] as? JsonArray)
+            ?: return emptyList()
+        return raw.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.lowercase() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+    }
+
     private fun detectReasoningHint(id: String, obj: JsonObject): Boolean? {
         val explicit = (obj["reasoning"] as? JsonPrimitive)?.booleanOrNull
         if (explicit != null) return explicit
+        val supportedParams = obj["supported_parameters"] as? JsonArray
+        if (supportedParams != null) {
+            val hasReasoningParam = supportedParams.any {
+                val p = (it as? JsonPrimitive)?.contentOrNull.orEmpty()
+                p.equals("reasoning", true) || p.equals("include_reasoning", true)
+            }
+            if (hasReasoningParam) return true
+        }
         val lower = id.lowercase()
         return when {
             lower.contains("reasoner") || lower.contains("r1") ||

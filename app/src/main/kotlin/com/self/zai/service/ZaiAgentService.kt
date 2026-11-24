@@ -27,10 +27,12 @@ class ZaiAgentService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         ensureChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        instance = this
         when (intent?.action) {
             ACTION_STOP_TASK -> {
                 (application as? ZaiApplication)?.agentCoordinator?.stopActiveRun()
@@ -46,7 +48,7 @@ class ZaiAgentService : Service() {
             }
         }
 
-        val statusText = intent?.getStringExtra(EXTRA_STATUS).orEmpty().ifBlank { "Zai 正在执行手机任务" }
+        val statusText = intent?.getStringExtra(EXTRA_STATUS).orEmpty().ifBlank { "正在操作手机" }
         acquireWakeLock()
         val notif = buildNotification(statusText)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -58,6 +60,7 @@ class ZaiAgentService : Service() {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         releaseWakeLock()
         super.onDestroy()
     }
@@ -121,6 +124,10 @@ class ZaiAgentService : Service() {
     }
 
     companion object {
+        @Volatile
+        var instance: ZaiAgentService? = null
+            private set
+
         private const val CHANNEL_ID = "zai_agent_running"
         private const val NOTIF_ID = 4102
         const val ACTION_UPDATE = "com.self.zai.action.UPDATE"

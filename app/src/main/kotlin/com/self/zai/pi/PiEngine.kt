@@ -699,14 +699,16 @@ class PiEngine(
         for (p in list) {
             val modelsArr = JSONArray()
             for (m in p.models) {
-                modelsArr.put(
-                    JSONObject()
-                        .put("id", m.id)
-                        .put("contextWindow", m.contextWindow)
-                        .put("images", m.supportsImages)
-                        .put("reasoning", m.reasoning)
-                        .put("api", m.api),
-                )
+                val modelObj = JSONObject()
+                    .put("id", m.id)
+                    .put("contextWindow", m.contextWindow)
+                    .put("images", m.supportsImages)
+                    .put("reasoning", m.reasoning)
+                    .put("api", m.api)
+                if (m.efforts.isNotEmpty()) {
+                    modelObj.put("efforts", JSONArray(m.efforts))
+                }
+                modelsArr.put(modelObj)
             }
             arr.put(
                 JSONObject()

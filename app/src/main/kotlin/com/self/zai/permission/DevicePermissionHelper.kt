@@ -1,6 +1,7 @@
 package com.self.zai.permission
 
 import android.Manifest
+import android.app.AppOpsManager
 import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
@@ -9,6 +10,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.os.Process
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.self.zai.phone.ZaiAccessibilityService
@@ -56,6 +58,25 @@ object DevicePermissionHelper {
             context,
             Manifest.permission.WRITE_SECURE_SETTINGS,
         ) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Checks Xiaomi MIUI/HyperOS proprietary OP_BACKGROUND_START_ACTIVITY (op 10021).
+     * Returns null if unavailable on non-Xiaomi or restricted ROMs.
+     */
+    fun hasXiaomiBgPopupPermission(context: Context): Boolean? {
+        if (!isXiaomiDevice()) return true
+        return runCatching {
+            val ops = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            val method = ops.javaClass.getMethod(
+                "checkOpNoThrow",
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                String::class.java,
+            )
+            val mode = method.invoke(ops, 10021, Process.myUid(), context.packageName) as Int
+            mode == AppOpsManager.MODE_ALLOWED
+        }.getOrNull()
+    }
 
     /**
      * Restores Zai's AccessibilityService directly via Android Secure Settings without needing Shizuku

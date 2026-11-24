@@ -29,6 +29,7 @@ data class CustomModelEntry(
     val contextWindow: Int = 128_000,
     val supportsImages: Boolean = true,
     val reasoning: Boolean = false,
+    val efforts: List<String> = emptyList(),
     val api: String = "openai-completions",
 )
 
@@ -67,7 +68,39 @@ data class ModelOption(
     val contextWindow: Int,
     val supportsImages: Boolean,
     val thinkingLevels: List<String>,
-)
+) {
+    val supportsThinkingSelection: Boolean
+        get() = thinkingLevels.size > 1 || (thinkingLevels.size == 1 && thinkingLevels.first() != "off")
+
+    fun clampThinking(requested: String?): String {
+        val supported = thinkingLevels.ifEmpty { listOf("off") }
+        if (!requested.isNullOrBlank() && requested in supported) return requested
+        val order = listOf("off", "minimal", "low", "medium", "high", "xhigh", "max")
+        val idx = requested?.let { order.indexOf(it) } ?: -1
+        if (idx >= 0) {
+            for (i in idx until order.size) {
+                if (order[i] in supported) return order[i]
+            }
+            for (i in idx - 1 downTo 0) {
+                if (order[i] in supported) return order[i]
+            }
+        }
+        return if ("medium" in supported) "medium" else supported.first()
+    }
+}
+
+object ThinkingLevelDisplay {
+    fun label(level: String): String = when (level.lowercase()) {
+        "off", "none" -> "关闭"
+        "minimal" -> "极低"
+        "low" -> "低"
+        "medium" -> "中"
+        "high" -> "高"
+        "xhigh" -> "极高"
+        "max" -> "最大"
+        else -> level
+    }
+}
 
 data class ProviderStatus(
     val id: String,
@@ -122,6 +155,9 @@ data class ChatSession(
     val updatedAtMs: Long,
     val messages: List<ChatMessage> = emptyList(),
     val piTranscriptJson: String? = null,
+    val providerId: String? = null,
+    val modelId: String? = null,
+    val thinkingLevel: String? = null,
 )
 
 sealed interface AuthUiState {
