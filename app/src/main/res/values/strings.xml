@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Zai</string>
+    <string name="accessibility_service_label">Zai 手机操控</string>
+    <string name="accessibility_service_description">用于读取当前屏幕控件并在你发起任务时执行点击、滑动和输入操作。</string>
+</resources>

@@ -1,0 +1,148 @@
+package com.self.zai.service
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import android.os.PowerManager
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.self.zai.MainActivity
+import com.self.zai.R
+import com.self.zai.ZaiApplication
+
+/**
+ * Foreground service active only while Zai is executing a phone task.
+ * Prevents HyperOS from freezing the process mid-task and exposes a one-tap Stop action in the shade.
+ */
+class ZaiAgentService : Service() {
+
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        ensureChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP_TASK -> {
+                (application as? ZaiApplication)?.agentCoordinator?.stopActiveRun()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            ACTION_STOP_SERVICE -> {
+                releaseWakeLock()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        }
+
+        val statusText = intent?.getStringExtra(EXTRA_STATUS).orEmpty().ifBlank { "Zai 正在执行手机任务" }
+        acquireWakeLock()
+        val notif = buildNotification(statusText)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIF_ID, notif)
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        releaseWakeLock()
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Zai::AgentRunLock").apply {
+            setReferenceCounted(false)
+            acquire(15 * 60 * 1000L)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        runCatching {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        }
+        wakeLock = null
+    }
+
+    private fun ensureChannel() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Zai 任务运行状态",
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply {
+            description = "执行手机操控任务时的运行状态与一键停止按钮"
+            setShowBadge(false)
+        }
+        nm.createNotificationChannel(channel)
+    }
+
+    private fun buildNotification(statusText: String): Notification {
+        val openPending = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val stopPending = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, ZaiAgentService::class.java).setAction(ACTION_STOP_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_zai)
+            .setContentTitle("Zai 正在操控手机")
+            .setContentText(statusText)
+            .setOngoing(true)
+            .setContentIntent(openPending)
+            .addAction(0, "立即停止", stopPending)
+            .build()
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "zai_agent_running"
+        private const val NOTIF_ID = 4102
+        const val ACTION_UPDATE = "com.self.zai.action.UPDATE"
+        const val ACTION_STOP_TASK = "com.self.zai.action.STOP_TASK"
+        const val ACTION_STOP_SERVICE = "com.self.zai.action.STOP_SERVICE"
+        const val EXTRA_STATUS = "extra_status"
+
+        fun startOrUpdate(context: Context, status: String) {
+            runCatching {
+                val intent = Intent(context, ZaiAgentService::class.java).apply {
+                    action = ACTION_UPDATE
+                    putExtra(EXTRA_STATUS, status)
+                }
+                ContextCompat.startForegroundService(context, intent)
+            }
+        }
+
+        fun stop(context: Context) {
+            runCatching {
+                val intent = Intent(context, ZaiAgentService::class.java).setAction(ACTION_STOP_SERVICE)
+                context.startService(intent)
+            }
+        }
+    }
+}
