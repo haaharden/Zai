@@ -69,10 +69,17 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         val app = application as ZaiApplication
+        app.agentCoordinator.isAppInForeground = true
         app.shizukuBridge.refreshStatus()
         if (app.shizukuBridge.status.value.binderAlive && app.shizukuBridge.status.value.permissionGranted) {
             app.shizukuBridge.bindAsync()
         }
+    }
+
+    override fun onPause() {
+        val app = application as ZaiApplication
+        app.agentCoordinator.isAppInForeground = false
+        super.onPause()
     }
 
     private fun openAuthUrl(url: String) {
@@ -218,8 +225,8 @@ private fun ZaiRoot(
                         onShizukuInstallApk = { file ->
                             AppUpdater.installApkViaShizuku(app, app.shizukuBridge, file)
                         },
-                        onReloadPiHotUpdate = { app.piEngine.hotReload() },
-                        onResetPiHotUpdate = { app.piEngine.resetToBundledPi() },
+                        onReloadPiHotUpdate = { coordinator.reloadPiEngine(resetToBundled = false) },
+                        onResetPiHotUpdate = { coordinator.reloadPiEngine(resetToBundled = true) },
                         onBack = { route = OverlayRoute.NONE },
                     )
 

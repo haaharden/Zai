@@ -43,11 +43,15 @@ class PhoneController(
     private val settingsStore: SettingsStore,
     private val shizuku: ShizukuBridge,
     private val onCapsuleHideForCapture: (Boolean) -> Unit,
-    private val onStepTextChanged: (String) -> Unit,
+    private val onStepProgress: (stepNumber: Int, label: String) -> Unit,
+    private val onTapMarker: (x: Int, y: Int) -> Unit,
 ) : PiToolHandler {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val stepCount = AtomicInteger(0)
+
+    @Volatile
+    private var operatedPhoneThisRun: Boolean = false
 
     @Volatile
     private var lastSnapshot: ScreenSnapshot? = null
@@ -62,8 +66,11 @@ class PhoneController(
 
     fun resetRunCounters() {
         stepCount.set(0)
+        operatedPhoneThisRun = false
         clearPendingConfirmations()
     }
+
+    fun didOperatePhoneThisRun(): Boolean = operatedPhoneThisRun
 
     fun resolveConfirmation(callId: String, allow: Boolean) {
         confirmationWaiters.remove(callId)?.complete(allow)
@@ -137,7 +144,8 @@ class PhoneController(
         tool: String,
         args: JSONObject,
     ): ToolExecutionResult {
-        onStepTextChanged(PhoneToolCatalog.humanLabel(tool, args))
+        operatedPhoneThisRun = true
+        onStepProgress(stepCount.get().coerceAtLeast(1), PhoneToolCatalog.humanLabel(tool, args))
 
         return when (tool) {
             "read_screen" -> {
@@ -388,11 +396,13 @@ class PhoneController(
     }
 
     private suspend fun performTap(x: Int, y: Int): Boolean {
+        onTapMarker(x, y)
         if (shouldUseShizuku() && shizuku.tap(x, y).isSuccess) return true
         return ZaiAccessibilityService.instance?.performTap(x, y) == true
     }
 
     private suspend fun performLongPress(x: Int, y: Int, durationMs: Int): Boolean {
+        onTapMarker(x, y)
         if (shouldUseShizuku() && shizuku.longPress(x, y, durationMs).isSuccess) return true
         return ZaiAccessibilityService.instance?.performTap(x, y, durationMs.toLong()) == true
     }

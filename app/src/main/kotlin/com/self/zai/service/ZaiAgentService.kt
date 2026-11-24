@@ -144,5 +144,38 @@ class ZaiAgentService : Service() {
                 context.startService(intent)
             }
         }
+
+        fun postTaskFinishedFallback(context: Context, summary: String) {
+            runCatching {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val doneChannel = NotificationChannel(
+                    DONE_CHANNEL_ID,
+                    "Zai 任务完成提醒",
+                    NotificationManager.IMPORTANCE_HIGH,
+                )
+                nm.createNotificationChannel(doneChannel)
+                val openPending = PendingIntent.getActivity(
+                    context,
+                    2,
+                    Intent(context, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    },
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                val notif = NotificationCompat.Builder(context, DONE_CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_stat_zai)
+                    .setContentTitle("Zai 已完成手机操控")
+                    .setContentText(summary.ifBlank { "点击返回查看结果" })
+                    .setAutoCancel(true)
+                    .setContentIntent(openPending)
+                    .build()
+                nm.notify(DONE_NOTIF_ID, notif)
+            }
+        }
+
+        private const val DONE_CHANNEL_ID = "zai_task_finished"
+        private const val DONE_NOTIF_ID = 4103
     }
 }

@@ -104,49 +104,6 @@ private val PRESET_PROVIDERS = listOf(
         defaultImages = true,
         hint = "聚合多模型",
     ),
-    ProviderPreset(
-        name = "OpenAI API",
-        baseUrl = "https://api.openai.com/v1",
-        defaultImages = true,
-        hint = "官方密钥",
-    ),
-    ProviderPreset(
-        name = "硅基流动",
-        baseUrl = "https://api.siliconflow.cn/v1",
-        defaultImages = true,
-        hint = "SiliconFlow",
-    ),
-    ProviderPreset(
-        name = "智谱 GLM",
-        baseUrl = "https://open.bigmodel.cn/api/paas/v4",
-        defaultImages = true,
-        hint = "BigModel",
-    ),
-    ProviderPreset(
-        name = "Kimi",
-        baseUrl = "https://api.moonshot.cn/v1",
-        defaultImages = true,
-        hint = "月之暗面",
-    ),
-    ProviderPreset(
-        name = "阿里云百炼",
-        baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        defaultImages = true,
-        hint = "通义千问",
-    ),
-    ProviderPreset(
-        name = "Gemini",
-        baseUrl = "https://generativelanguage.googleapis.com/v1beta/openai",
-        defaultImages = true,
-        hint = "Google",
-    ),
-    ProviderPreset(
-        name = "Claude",
-        baseUrl = "https://api.anthropic.com",
-        api = "anthropic-messages",
-        defaultImages = true,
-        hint = "Anthropic",
-    ),
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)

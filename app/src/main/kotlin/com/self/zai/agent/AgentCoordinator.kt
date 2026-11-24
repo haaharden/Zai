@@ -2,6 +2,8 @@ package com.self.zai.agent
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import com.self.zai.MainActivity
 import com.self.zai.data.SecureStore
 import com.self.zai.data.SettingsStore
 import com.self.zai.model.ActionStep
@@ -25,6 +27,7 @@ import com.self.zai.shell.ShizukuBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,15 +48,32 @@ class AgentCoordinator(
         onStopRequested = { stopActiveRun() },
     )
 
+    @Volatile
+    var isAppInForeground: Boolean = true
+
     val phoneController = PhoneController(
         context = context,
         settingsStore = settingsStore,
         shizuku = shizuku,
         onCapsuleHideForCapture = { hidden -> floatingCapsule.setTemporarilyHidden(hidden) },
-        onStepTextChanged = { stepLabel ->
+        onStepProgress = { stepNum, stepLabel ->
             _liveStepLabel.value = stepLabel
-            floatingCapsule.updateStatus(stepLabel)
-            ZaiAgentService.startOrUpdate(context, stepLabel)
+            val s = settingsStore.settings.value
+            if (s.showFloatingCapsule || s.showEdgeGlow) {
+                floatingCapsule.show(
+                    initialStatus = stepLabel,
+                    stepNumber = stepNum,
+                    showCapsule = s.showFloatingCapsule,
+                    showEdgeGlow = s.showEdgeGlow,
+                )
+                floatingCapsule.updateStatus(stepLabel, stepNum)
+            }
+            ZaiAgentService.startOrUpdate(context, "第 $stepNum 步：$stepLabel")
+        },
+        onTapMarker = { x, y ->
+            if (settingsStore.settings.value.showEdgeGlow || settingsStore.settings.value.showFloatingCapsule) {
+                floatingCapsule.showTapMarker(x, y)
+            }
         },
     )
 
@@ -250,9 +270,6 @@ class AgentCoordinator(
         _isRunning.value = true
         _liveStepLabel.value = "思考中…"
         ZaiAgentService.startOrUpdate(context, "正在处理：$updatedTitle")
-        if (settingsStore.settings.value.showFloatingCapsule) {
-            floatingCapsule.show("Zai 思考中…")
-        }
 
         piEngine.prompt(sessionId, text)
         return Result.success(Unit)
@@ -272,6 +289,12 @@ class AgentCoordinator(
         }
     }
 
+    fun reloadPiEngine(resetToBundled: Boolean = false) {
+        if (_isRunning.value) stopActiveRun()
+        configuredSessions.clear()
+        if (resetToBundled) piEngine.resetToBundledPi() else piEngine.hotReload()
+    }
+
     suspend fun repairAccessibilityWithShizuku(): Result<Unit> {
         if (DevicePermissionHelper.hasWriteSecureSettings(context)) {
             val nativeRes = DevicePermissionHelper.restoreAccessibilityViaSecureSettings(context)
@@ -281,11 +304,61 @@ class AgentCoordinator(
         return shizuku.restoreAccessibilityService(component)
     }
 
-    private fun finishRunUiState() {
+    private fun finishRunUiState(allowAutoReturn: Boolean = false, sessionId: String? = null) {
+        val operated = phoneController.didOperatePhoneThisRun()
         _isRunning.value = false
         _liveStepLabel.value = ""
         floatingCapsule.dismiss()
         ZaiAgentService.stop(context)
+
+        if (allowAutoReturn && operated && settingsStore.settings.value.returnToZaiOnFinish && !isAppInForeground) {
+            val summary = sessionId?.let { id ->
+                settingsStore.sessions.value.firstOrNull { it.id == id }
+                    ?.messages?.lastOrNull { it.role == MessageRole.ASSISTANT }
+                    ?.text?.lineSequence()?.firstOrNull()?.take(60)
+            }.orEmpty()
+            returnToZaiAsync(summary)
+        }
+    }
+
+    private fun returnToZaiAsync(summary: String) {
+        scope.launch {
+            delay(250L)
+            if (isAppInForeground) return@launch
+
+            val intent = Intent(context, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                )
+            }
+
+            // 1. AccessibilityService context has elevated background-launch privilege on Android/HyperOS
+            val a11yLaunched = ZaiAccessibilityService.instance?.let { svc ->
+                runCatching {
+                    svc.startActivity(intent)
+                    true
+                }.getOrDefault(false)
+            } ?: false
+
+            if (!a11yLaunched) {
+                runCatching { context.startActivity(intent) }
+            }
+
+            delay(450L)
+            if (isAppInForeground) return@launch
+
+            // 2. Fallback via Shizuku if connected
+            if (shizuku.status.value.isReady) {
+                shizuku.exec("am start -n ${context.packageName}/${MainActivity::class.java.name}", 4_000)
+                delay(400L)
+                if (isAppInForeground) return@launch
+            }
+
+            // 3. Last-resort heads-up notification so user can tap straight back
+            ZaiAgentService.postTaskFinishedFallback(context, summary)
+        }
     }
 
     private fun observeProviders() {
@@ -336,7 +409,6 @@ class AgentCoordinator(
                     is PiSessionEvent.ToolStart -> {
                         val label = PhoneToolCatalog.humanLabel(event.tool, event.args)
                         _liveStepLabel.value = label
-                        floatingCapsule.updateStatus(label)
                         val step = ActionStep(
                             id = "st_${UUID.randomUUID().toString().take(6)}",
                             tool = event.tool,
@@ -391,13 +463,13 @@ class AgentCoordinator(
 
                     is PiSessionEvent.Idle -> {
                         if (event.sessionId == _activeSessionId.value) {
-                            finishRunUiState()
+                            finishRunUiState(allowAutoReturn = true, sessionId = event.sessionId)
                         }
                     }
 
                     is PiSessionEvent.Error -> {
                         if (event.sessionId == _activeSessionId.value) {
-                            finishRunUiState()
+                            finishRunUiState(allowAutoReturn = true, sessionId = event.sessionId)
                         }
                         updateLastAssistantMessage(event.sessionId) { msg ->
                             msg.copy(

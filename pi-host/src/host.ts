@@ -214,7 +214,7 @@ let promptSeq = 0;
 const authPrompts = new Map<string, { resolve: (v: string) => void; reject: (e: unknown) => void }>();
 
 function modelsFor(providerId: string, credentialType?: string) {
-  return models
+  const list = models
     .getModels(providerId)
     .filter((m) => !(providerId === "openai" && credentialType === "oauth") || SUBSCRIPTION_IDS.has(m.id))
     .map((m) => ({
@@ -224,6 +224,8 @@ function modelsFor(providerId: string, credentialType?: string) {
       contextWindow: m.contextWindow,
       input: m.input,
     }));
+  // Catalog is ordered oldest -> newest; show newest flagship ChatGPT models (e.g. gpt-6.2) first
+  return providerId === "openai" && credentialType === "oauth" ? list.reverse() : list;
 }
 
 async function emitStatus() {

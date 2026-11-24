@@ -357,10 +357,24 @@ fun SettingsScreen(
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
                 ToggleRow(
-                    title = "执行时显示悬浮停止胶囊",
-                    subtitle = "在屏幕边缘显示当前步骤与随时停止按钮，截屏时自动避让",
+                    title = "操控时显示顶部提示胶囊",
+                    subtitle = "在屏幕顶部显示当前步骤与停止按钮（已开无障碍时免悬浮窗权限，截屏自动避让）",
                     checked = settings.showFloatingCapsule,
                     onCheckedChange = { v -> onUpdateSettings { it.copy(showFloatingCapsule = v) } },
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ToggleRow(
+                    title = "操控时显示屏幕边缘光边与点击反馈",
+                    subtitle = "操控期间屏幕四周亮起呼吸光边、保持常亮，并在点击落点闪现定位光圈",
+                    checked = settings.showEdgeGlow,
+                    onCheckedChange = { v -> onUpdateSettings { it.copy(showEdgeGlow = v) } },
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                ToggleRow(
+                    title = "操控完成后自动返回 Zai",
+                    subtitle = "任务结束后自动切回 Zai 查看结果（被系统拦截时发完成通知提醒）",
+                    checked = settings.returnToZaiOnFinish,
+                    onCheckedChange = { v -> onUpdateSettings { it.copy(returnToZaiOnFinish = v) } },
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
                 ToggleRow(

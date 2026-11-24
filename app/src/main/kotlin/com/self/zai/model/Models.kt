@@ -48,6 +48,8 @@ data class AppSettings(
     val perceptionMode: PerceptionMode = PerceptionMode.HYBRID,
     val autoRestoreAccessibility: Boolean = true,
     val showFloatingCapsule: Boolean = true,
+    val showEdgeGlow: Boolean = true,
+    val returnToZaiOnFinish: Boolean = true,
     val confirmSensitiveActions: Boolean = true,
     val maxStepsPerRun: Int = 40,
     val activeProviderId: String = "",
