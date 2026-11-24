@@ -13,6 +13,7 @@ import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
 import com.self.zai.model.ProviderStatus
 import com.self.zai.model.StepState
+import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.phone.PhoneController
 import com.self.zai.phone.PhoneToolCatalog
 import com.self.zai.phone.ZaiAccessibilityService
@@ -272,6 +273,10 @@ class AgentCoordinator(
     }
 
     suspend fun repairAccessibilityWithShizuku(): Result<Unit> {
+        if (DevicePermissionHelper.hasWriteSecureSettings(context)) {
+            val nativeRes = DevicePermissionHelper.restoreAccessibilityViaSecureSettings(context)
+            if (nativeRes.isSuccess) return nativeRes
+        }
         val component = ComponentName(context, ZaiAccessibilityService::class.java).flattenToString()
         return shizuku.restoreAccessibilityService(component)
     }

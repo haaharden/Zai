@@ -107,16 +107,17 @@ fun ChatScreen(
     var showSessionsSheet by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    val hasControlChannel = shizukuStatus.isReady || accessibilityConnected
+    val hasControlChannel = accessibilityConnected || shizukuStatus.isReady
     val channelColor = when {
+        accessibilityConnected -> MaterialTheme.colorScheme.secondary
         shizukuStatus.isReady -> MaterialTheme.colorScheme.secondary
-        accessibilityConnected -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.tertiary
     }
     val channelLabel = when {
+        accessibilityConnected && shizukuStatus.isReady -> "无障碍与 Shizuku 已就绪"
+        accessibilityConnected -> "无障碍已就绪"
         shizukuStatus.isReady -> "Shizuku 已就绪"
-        accessibilityConnected -> "无障碍已连接"
-        else -> "尚未连接控屏通道"
+        else -> "尚未开启无障碍服务"
     }
 
     LaunchedEffect(session.id, session.messages.size, session.messages.lastOrNull()?.steps?.size, session.messages.lastOrNull()?.text?.length) {
@@ -243,9 +244,9 @@ fun ChatScreen(
                     Spacer(Modifier.width(10.dp))
                     Text(
                         text = if (missingModel) {
-                            "先登录 ChatGPT 或添加接口密钥"
+                            "先登录 ChatGPT 或添加供应商密钥"
                         } else {
-                            "开启 Shizuku 或无障碍后即可控制手机"
+                            "开启无障碍服务后即可控制手机"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,

@@ -16,6 +16,7 @@ import com.self.zai.data.SettingsStore
 import com.self.zai.model.ControlChannelMode
 import com.self.zai.model.PendingConfirmation
 import com.self.zai.model.PerceptionMode
+import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.pi.BeforeToolVerdict
 import com.self.zai.pi.PiToolHandler
 import com.self.zai.pi.ToolExecutionResult
@@ -452,8 +453,17 @@ class PhoneController(
         val settings = settingsStore.settings.value
         if (!settings.autoRestoreAccessibility) return
         if (ZaiAccessibilityService.isReallyConnected()) return
-        if (!shizuku.status.value.isReady) return
 
+        // 1. Prefer native WRITE_SECURE_SETTINGS (works without Shizuku or Developer Options)
+        if (DevicePermissionHelper.hasWriteSecureSettings(context)) {
+            if (DevicePermissionHelper.restoreAccessibilityViaSecureSettings(context).isSuccess) {
+                delay(450L)
+                if (ZaiAccessibilityService.isReallyConnected()) return
+            }
+        }
+
+        // 2. Fallback to Shizuku if connected
+        if (!shizuku.status.value.isReady) return
         val component = ComponentName(context, ZaiAccessibilityService::class.java).flattenToString()
         if (shizuku.restoreAccessibilityService(component).isSuccess) {
             delay(450L)

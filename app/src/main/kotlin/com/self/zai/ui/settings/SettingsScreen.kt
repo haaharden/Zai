@@ -1,5 +1,8 @@
 package com.self.zai.ui.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -104,6 +107,7 @@ fun SettingsScreen(
     var hasNotification by remember { mutableStateOf(DevicePermissionHelper.hasNotificationPermission(context)) }
     var batteryIgnored by remember { mutableStateOf(DevicePermissionHelper.isIgnoringBatteryOptimizations(context)) }
     var a11ySettingOn by remember { mutableStateOf(DevicePermissionHelper.isAccessibilityEnabledInSettings(context)) }
+    var hasWriteSecure by remember { mutableStateOf(DevicePermissionHelper.hasWriteSecureSettings(context)) }
 
     var repoInput by remember(settings.githubUpdateRepo) { mutableStateOf(settings.githubUpdateRepo) }
     var updateChecking by remember { mutableStateOf(false) }
@@ -126,6 +130,7 @@ fun SettingsScreen(
                 hasNotification = DevicePermissionHelper.hasNotificationPermission(context)
                 batteryIgnored = DevicePermissionHelper.isIgnoringBatteryOptimizations(context)
                 a11ySettingOn = DevicePermissionHelper.isAccessibilityEnabledInSettings(context)
+                hasWriteSecure = DevicePermissionHelper.hasWriteSecureSettings(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -208,28 +213,83 @@ fun SettingsScreen(
                 }
             }
 
-            // 2. Phone Control Channels (Shizuku + Accessibility)
+            // 2. Phone Control Channels (Accessibility Primary, Optional Shizuku)
             SettingsGroup(title = "手机操控通道") {
-                // Shizuku row
+                // Accessibility primary row (no Developer Options or Shizuku required)
+                val a11yColor = when {
+                    accessibilityConnected -> MaterialTheme.colorScheme.secondary
+                    a11ySettingOn -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.outline
+                }
+                val a11ySubtitle = when {
+                    accessibilityConnected -> "服务已真实绑定，无需开发者选项或 Shizuku 即可直接控手机"
+                    a11ySettingOn -> "系统开关虽开但服务已脱绑，可一键恢复或在系统设置重开一次"
+                    else -> "开启「Zai 手机操控」即可读屏、点击、滑动和输入文字"
+                }
+                val canAutoRepair = !accessibilityConnected && (hasWriteSecure || shizukuStatus.isReady)
+                StatusActionRow(
+                    dotColor = a11yColor,
+                    title = "无障碍服务（主力通道）",
+                    subtitle = a11ySubtitle,
+                    actionLabel = if (canAutoRepair) "一键恢复" else "去设置",
+                    onAction = {
+                        if (canAutoRepair) {
+                            scope.launch {
+                                val res = onRepairAccessibility()
+                                val msg = res.fold(
+                                    onSuccess = { "已自动重新激活无障碍服务" },
+                                    onFailure = { "自动恢复失败，请手动开启：${it.message}" },
+                                )
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                if (res.isFailure) DevicePermissionHelper.openAccessibilitySettings(context)
+                            }
+                        } else {
+                            DevicePermissionHelper.openAccessibilitySettings(context)
+                        }
+                    },
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+
+                // Permanent zero-Shizuku self-healing permission row
+                val grantCmd = "adb shell pm grant com.self.zai android.permission.WRITE_SECURE_SETTINGS"
+                StatusActionRow(
+                    dotColor = if (hasWriteSecure) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
+                    title = "无障碍永久自愈（可选，免 Shizuku）",
+                    subtitle = if (hasWriteSecure) {
+                        "已授予 WRITE_SECURE_SETTINGS，关掉开发者选项与重启手机后依然可自动拉起无障碍"
+                    } else {
+                        "若系统偶发关闭无障碍，用电脑执行一次 ADB 授权即可永久自愈，授完即可关闭开发者选项"
+                    },
+                    actionLabel = if (hasWriteSecure) "已就绪" else "复制命令",
+                    onAction = {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("Zai ADB", grantCmd))
+                        Toast.makeText(context, "已复制授权命令，在电脑终端执行一次即可", Toast.LENGTH_LONG).show()
+                    },
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+
+                // Optional Shizuku row
                 val shizukuColor = when {
                     shizukuStatus.isReady -> MaterialTheme.colorScheme.secondary
                     shizukuStatus.binderAlive -> MaterialTheme.colorScheme.tertiary
                     else -> MaterialTheme.colorScheme.outline
                 }
                 val shizukuSubtitle = when {
-                    shizukuStatus.isReady -> "已连接 ${shizukuStatus.identityLabel}，绕过系统无障碍风控"
-                    shizukuStatus.binderAlive && !shizukuStatus.permissionGranted -> "Shizuku 已运行，点击一次授权即可"
-                    shizukuStatus.installed -> "已安装 Shizuku，但后台服务尚未启动"
-                    else -> "未安装 Shizuku，可前往官网安装免 Root 激活"
+                    shizukuStatus.isReady -> "已连接 ${shizukuStatus.identityLabel}，可作为备用点击/截屏通道"
+                    shizukuStatus.binderAlive && !shizukuStatus.permissionGranted -> "检测到 Shizuku 正在运行，可点右侧授权"
+                    else -> "非必需：不装 Shizuku、关掉开发者选项也能完整操控手机"
                 }
                 StatusActionRow(
                     dotColor = shizukuColor,
-                    title = "Shizuku 通道（推荐主力）",
+                    title = "Shizuku 增强通道（可选）",
                     subtitle = shizukuSubtitle,
                     actionLabel = when {
                         shizukuStatus.isReady -> "测试"
                         shizukuStatus.binderAlive -> "授权"
-                        else -> "打开"
+                        else -> "了解"
                     },
                     onAction = {
                         when {
@@ -249,56 +309,21 @@ fun SettingsScreen(
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
 
-                // Accessibility real-binding row
-                val a11yColor = when {
-                    accessibilityConnected -> MaterialTheme.colorScheme.secondary
-                    a11ySettingOn -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.outline
-                }
-                val a11ySubtitle = when {
-                    accessibilityConnected -> "服务已真实绑定，可极速读取控件树与输入中文"
-                    a11ySettingOn -> "系统开关虽开但服务已脱绑，可用 Shizuku 恢复或重开开关"
-                    else -> "未开启，可用于极速控件树读屏与备用手势"
-                }
-                StatusActionRow(
-                    dotColor = a11yColor,
-                    title = "无障碍服务",
-                    subtitle = a11ySubtitle,
-                    actionLabel = if (!accessibilityConnected && shizukuStatus.isReady) "一键恢复" else "去设置",
-                    onAction = {
-                        if (!accessibilityConnected && shizukuStatus.isReady) {
-                            scope.launch {
-                                val res = onRepairAccessibility()
-                                val msg = res.fold(
-                                    onSuccess = { "已通过 Shizuku 重新激活无障碍" },
-                                    onFailure = { "自动恢复失败，请手动开启：${it.message}" },
-                                )
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                if (res.isFailure) DevicePermissionHelper.openAccessibilitySettings(context)
-                            }
-                        } else {
-                            DevicePermissionHelper.openAccessibilitySettings(context)
-                        }
-                    },
-                )
-
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-
                 Column(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text("执行优先级", style = MaterialTheme.typography.titleSmall)
+                    Text("操控模式", style = MaterialTheme.typography.titleSmall)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = settings.channelMode == ControlChannelMode.SHIZUKU_FIRST,
-                            onClick = { onUpdateSettings { it.copy(channelMode = ControlChannelMode.SHIZUKU_FIRST) } },
-                            label = { Text("Shizuku 优先") },
-                        )
                         FilterChip(
                             selected = settings.channelMode == ControlChannelMode.ACCESSIBILITY_ONLY,
                             onClick = { onUpdateSettings { it.copy(channelMode = ControlChannelMode.ACCESSIBILITY_ONLY) } },
-                            label = { Text("仅无障碍") },
+                            label = { Text("无障碍模式（免开发者选项）") },
+                        )
+                        FilterChip(
+                            selected = settings.channelMode == ControlChannelMode.SHIZUKU_FIRST,
+                            onClick = { onUpdateSettings { it.copy(channelMode = ControlChannelMode.SHIZUKU_FIRST) } },
+                            label = { Text("Shizuku 优先（可选）") },
                         )
                     }
 
@@ -326,7 +351,7 @@ fun SettingsScreen(
 
                 ToggleRow(
                     title = "无障碍掉线自动恢复",
-                    subtitle = "检测到无障碍被系统关闭时，通过 Shizuku 自动重新拉起",
+                    subtitle = "已授予 WRITE_SECURE_SETTINGS 或连接 Shizuku 时，掉线自动拉起",
                     checked = settings.autoRestoreAccessibility,
                     onCheckedChange = { v -> onUpdateSettings { it.copy(autoRestoreAccessibility = v) } },
                 )

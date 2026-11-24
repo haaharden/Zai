@@ -51,6 +51,39 @@ object DevicePermissionHelper {
         return raw.split(":").any { it.equals(expected, ignoreCase = true) }
     }
 
+    fun hasWriteSecureSettings(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.WRITE_SECURE_SETTINGS,
+        ) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Restores Zai's AccessibilityService directly via Android Secure Settings without needing Shizuku
+     * or Developer Options (requires a one-time `adb shell pm grant com.self.zai android.permission.WRITE_SECURE_SETTINGS`).
+     */
+    fun restoreAccessibilityViaSecureSettings(context: Context): Result<Unit> = runCatching {
+        require(hasWriteSecureSettings(context)) { "未授予 WRITE_SECURE_SETTINGS 权限" }
+        val component = ComponentName(context, ZaiAccessibilityService::class.java).flattenToString()
+        val existingRaw = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        ).orEmpty()
+        val services = existingRaw.split(":").map { it.trim() }.filter { it.isNotEmpty() }
+        val merged = (services.filterNot { it.equals(component, ignoreCase = true) } + component)
+            .joinToString(":")
+        val ok1 = Settings.Secure.putString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            merged,
+        )
+        val ok2 = Settings.Secure.putInt(
+            context.contentResolver,
+            Settings.Secure.ACCESSIBILITY_ENABLED,
+            1,
+        )
+        require(ok1 && ok2) { "系统拒绝写入无障碍配置" }
+    }
+
     fun openAccessibilitySettings(context: Context) {
         startSafe(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }

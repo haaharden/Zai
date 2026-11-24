@@ -202,6 +202,13 @@ async function syncCustomProviders(list: CustomProviderConfig[], keys: Record<st
 }
 
 let deviceId = "";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function validDeviceId(): string {
+  if (!UUID_RE.test(deviceId)) {
+    deviceId = crypto.randomUUID();
+  }
+  return deviceId;
+}
 let loginAbort: AbortController | undefined;
 let promptSeq = 0;
 const authPrompts = new Map<string, { resolve: (v: string) => void; reject: (e: unknown) => void }>();
@@ -264,7 +271,7 @@ async function startLogin(provider: string, type: "oauth" | "api_key") {
   loginAbort = controller;
   try {
     const c = await models.login(provider, type, createAuthInteraction(controller.signal), {
-      getDeviceId: () => deviceId,
+      getDeviceId: validDeviceId,
       agentName: "Zai",
     });
     bridge({ type: "login_done", provider, credential: c.type });

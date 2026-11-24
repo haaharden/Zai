@@ -44,7 +44,7 @@ data class CustomProviderConfig(
 @Serializable
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val channelMode: ControlChannelMode = ControlChannelMode.SHIZUKU_FIRST,
+    val channelMode: ControlChannelMode = ControlChannelMode.ACCESSIBILITY_ONLY,
     val perceptionMode: PerceptionMode = PerceptionMode.HYBRID,
     val autoRestoreAccessibility: Boolean = true,
     val showFloatingCapsule: Boolean = true,

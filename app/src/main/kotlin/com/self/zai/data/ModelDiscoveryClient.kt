@@ -59,7 +59,9 @@ object ModelDiscoveryClient {
     fun candidateEndpoints(normalizedBase: String): List<Pair<String, String>> {
         if (normalizedBase.isEmpty()) return emptyList()
         val list = mutableListOf<Pair<String, String>>()
-        if (normalizedBase.endsWith("/v1") || normalizedBase.contains("/v1/")) {
+        val hasVersionSegment = Regex("/v\\d+(?:[a-z0-9_-]*)?(?:/.*)?$", RegexOption.IGNORE_CASE)
+            .containsMatchIn(normalizedBase)
+        if (hasVersionSegment) {
             list += normalizedBase to "$normalizedBase/models"
         } else {
             list += "$normalizedBase/v1" to "$normalizedBase/v1/models"

@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -728,11 +727,20 @@ class PiEngine(
         return obj
     }
 
-    @SuppressLint("HardwareIds")
-    private fun getStableDeviceId(): String =
-        runCatching {
-            Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-        }.getOrNull().orEmpty().ifBlank { "zai-android" }
+    private fun getStableDeviceId(): String {
+        val existing = secureStore.getString(KEY_DEVICE_UUID)
+        if (!existing.isNullOrBlank() && UUID_REGEX.matches(existing)) {
+            return existing
+        }
+        val created = java.util.UUID.randomUUID().toString()
+        secureStore.putString(KEY_DEVICE_UUID, created)
+        return created
+    }
+
+    companion object {
+        private const val KEY_DEVICE_UUID = "zai_device_uuid"
+        private val UUID_REGEX = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+    }
 
     private fun replyJs(id: String, ok: Boolean, value: Any?) {
         val payload = JSONObject()

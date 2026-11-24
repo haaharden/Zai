@@ -9,8 +9,10 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -29,6 +31,7 @@ class LoopbackServer(
     )
 
     private val servers = ConcurrentHashMap<Int, ServerSocket>()
+    private val openClients = Collections.newSetFromMap(ConcurrentHashMap<Socket, Boolean>())
     private val pendingResponses = ConcurrentHashMap<String, CompletableDeferred<PendingResponse>>()
     private val reqSeq = AtomicInteger(0)
 
@@ -36,7 +39,10 @@ class LoopbackServer(
         close(port)
         return runCatching {
             val bindHost = host.ifBlank { "127.0.0.1" }
-            val socket = ServerSocket(port, 16, InetAddress.getByName(bindHost))
+            val socket = ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(InetAddress.getByName(bindHost), port), 16)
+            }
             val actualPort = socket.localPort
             servers[actualPort] = socket
             scope.launch(Dispatchers.IO) {
@@ -48,6 +54,10 @@ class LoopbackServer(
 
     fun close(port: Int) {
         runCatching { servers.remove(port)?.close() }
+        for (client in openClients.toList()) {
+            openClients.remove(client)
+            runCatching { client.close() }
+        }
     }
 
     fun closeAll() {
@@ -70,8 +80,10 @@ class LoopbackServer(
     }
 
     private suspend fun handleClient(port: Int, socket: Socket) {
-        socket.use { s ->
-            s.soTimeout = 10_000
+        openClients.add(socket)
+        try {
+            socket.use { s ->
+                s.soTimeout = 10_000
             val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8))
             val requestLine = reader.readLine() ?: return
             // Drain headers
@@ -121,10 +133,13 @@ class LoopbackServer(
             sb.append("Content-Length: ${bodyBytes.size}\r\n")
             sb.append("Connection: close\r\n\r\n")
 
-            val out = s.getOutputStream()
-            out.write(sb.toString().toByteArray(Charsets.UTF_8))
-            out.write(bodyBytes)
-            out.flush()
+                val out = s.getOutputStream()
+                out.write(sb.toString().toByteArray(Charsets.UTF_8))
+                out.write(bodyBytes)
+                out.flush()
+            }
+        } finally {
+            openClients.remove(socket)
         }
     }
 }

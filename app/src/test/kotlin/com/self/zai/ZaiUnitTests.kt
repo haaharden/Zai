@@ -37,6 +37,18 @@ class ZaiUnitTests {
             listOf("https://relay.example.com/v1" to "https://relay.example.com/v1/models"),
             withV1,
         )
+
+        val zhipuV4 = ModelDiscoveryClient.candidateEndpoints("https://open.bigmodel.cn/api/paas/v4")
+        assertEquals(
+            listOf("https://open.bigmodel.cn/api/paas/v4" to "https://open.bigmodel.cn/api/paas/v4/models"),
+            zhipuV4,
+        )
+
+        val gemini = ModelDiscoveryClient.candidateEndpoints("https://generativelanguage.googleapis.com/v1beta/openai")
+        assertEquals(
+            listOf("https://generativelanguage.googleapis.com/v1beta/openai" to "https://generativelanguage.googleapis.com/v1beta/openai/models"),
+            gemini,
+        )
     }
 
     @Test

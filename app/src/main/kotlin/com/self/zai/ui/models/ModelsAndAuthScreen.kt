@@ -83,6 +83,72 @@ import com.self.zai.model.ModelOption
 import com.self.zai.model.ProviderStatus
 import kotlinx.coroutines.launch
 
+private data class ProviderPreset(
+    val name: String,
+    val baseUrl: String,
+    val api: String = "openai-completions",
+    val defaultImages: Boolean = true,
+    val hint: String = "",
+)
+
+private val PRESET_PROVIDERS = listOf(
+    ProviderPreset(
+        name = "DeepSeek",
+        baseUrl = "https://api.deepseek.com/v1",
+        defaultImages = false,
+        hint = "官方接口",
+    ),
+    ProviderPreset(
+        name = "OpenRouter",
+        baseUrl = "https://openrouter.ai/api/v1",
+        defaultImages = true,
+        hint = "聚合多模型",
+    ),
+    ProviderPreset(
+        name = "OpenAI API",
+        baseUrl = "https://api.openai.com/v1",
+        defaultImages = true,
+        hint = "官方密钥",
+    ),
+    ProviderPreset(
+        name = "硅基流动",
+        baseUrl = "https://api.siliconflow.cn/v1",
+        defaultImages = true,
+        hint = "SiliconFlow",
+    ),
+    ProviderPreset(
+        name = "智谱 GLM",
+        baseUrl = "https://open.bigmodel.cn/api/paas/v4",
+        defaultImages = true,
+        hint = "BigModel",
+    ),
+    ProviderPreset(
+        name = "Kimi",
+        baseUrl = "https://api.moonshot.cn/v1",
+        defaultImages = true,
+        hint = "月之暗面",
+    ),
+    ProviderPreset(
+        name = "阿里云百炼",
+        baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        defaultImages = true,
+        hint = "通义千问",
+    ),
+    ProviderPreset(
+        name = "Gemini",
+        baseUrl = "https://generativelanguage.googleapis.com/v1beta/openai",
+        defaultImages = true,
+        hint = "Google",
+    ),
+    ProviderPreset(
+        name = "Claude",
+        baseUrl = "https://api.anthropic.com",
+        api = "anthropic-messages",
+        defaultImages = true,
+        hint = "Anthropic",
+    ),
+)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ModelsAndAuthScreen(
@@ -112,6 +178,7 @@ fun ModelsAndAuthScreen(
     val context = LocalContext.current
 
     var editingProvider by remember { mutableStateOf<CustomProviderConfig?>(null) }
+    var selectedPreset by remember { mutableStateOf<ProviderPreset?>(null) }
     var showEditorSheet by remember { mutableStateOf(false) }
     var lastAutoOpenedUrl by remember { mutableStateOf<String?>(null) }
     var pasteCallbackInput by remember { mutableStateOf("") }
@@ -369,14 +436,14 @@ fun ModelsAndAuthScreen(
                 }
             }
 
-            // Section 2: Custom Providers (API Key + Base URL auto-discover models)
+            // Section 2: Custom Providers (Presets + API Key + Base URL auto-discover models)
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "自定义接口与密钥",
+                        text = "供应商与自定义接口",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.weight(1f),
@@ -384,12 +451,53 @@ fun ModelsAndAuthScreen(
                     TextButton(
                         onClick = {
                             editingProvider = null
+                            selectedPreset = null
                             showEditorSheet = true
                         },
                     ) {
                         Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("添加渠道")
+                        Text("自定义")
+                    }
+                }
+
+                // Quick-add preset providers
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "快速添加预设供应商（点选后填密钥即可自动拉取模型）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            PRESET_PROVIDERS.forEach { preset ->
+                                FilterChip(
+                                    selected = false,
+                                    onClick = {
+                                        editingProvider = null
+                                        selectedPreset = preset
+                                        showEditorSheet = true
+                                    },
+                                    label = {
+                                        Text(
+                                            text = preset.name,
+                                            style = MaterialTheme.typography.labelMedium,
+                                        )
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -405,18 +513,19 @@ fun ModelsAndAuthScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             Text(
-                                text = "输入任意兼容 OpenAI 的接口地址和密钥，Zai 会自动请求 /models 发现可用模型。",
+                                text = "也可以填入任意中转站或本地模型的地址和密钥，Zai 会自动请求 /models 发现可用模型。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             OutlinedButton(
                                 onClick = {
                                     editingProvider = null
+                                    selectedPreset = null
                                     showEditorSheet = true
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Text("添加第一个接口渠道")
+                                Text("手动添加中转站 / 自定义地址")
                             }
                         }
                     }
@@ -509,9 +618,13 @@ fun ModelsAndAuthScreen(
     if (showEditorSheet) {
         CustomProviderEditorSheet(
             editing = editingProvider,
+            preset = selectedPreset,
             initialApiKey = editingProvider?.let { onGetSavedApiKey(it.id) }.orEmpty(),
             onLookupCatalogMetadata = onLookupCatalogMetadata,
-            onDismiss = { showEditorSheet = false },
+            onDismiss = {
+                showEditorSheet = false
+                selectedPreset = null
+            },
             onSave = { name, baseUrl, apiKey, models, defaultImages ->
                 onSaveCustomProvider(
                     editingProvider?.id,
@@ -522,6 +635,7 @@ fun ModelsAndAuthScreen(
                     defaultImages,
                 )
                 showEditorSheet = false
+                selectedPreset = null
             },
         )
     }
@@ -531,6 +645,7 @@ fun ModelsAndAuthScreen(
 @Composable
 private fun CustomProviderEditorSheet(
     editing: CustomProviderConfig?,
+    preset: ProviderPreset?,
     initialApiKey: String,
     onLookupCatalogMetadata: (List<String>, (Map<String, Triple<Int, Boolean, Boolean>>) -> Unit) -> Unit,
     onDismiss: () -> Unit,
@@ -545,13 +660,13 @@ private fun CustomProviderEditorSheet(
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    var name by remember(editing) { mutableStateOf(editing?.name.orEmpty()) }
-    var baseUrl by remember(editing) { mutableStateOf(editing?.baseUrl.orEmpty()) }
+    var name by remember(editing, preset) { mutableStateOf(editing?.name ?: preset?.name.orEmpty()) }
+    var baseUrl by remember(editing, preset) { mutableStateOf(editing?.baseUrl ?: preset?.baseUrl.orEmpty()) }
     var apiKey by remember(editing, initialApiKey) { mutableStateOf(initialApiKey) }
     var keyVisible by remember { mutableStateOf(false) }
-    var defaultImages by remember(editing) { mutableStateOf(editing?.defaultImages ?: true) }
-    var apiProtocol by remember(editing) {
-        mutableStateOf(editing?.models?.firstOrNull()?.api ?: "openai-completions")
+    var defaultImages by remember(editing, preset) { mutableStateOf(editing?.defaultImages ?: preset?.defaultImages ?: true) }
+    var apiProtocol by remember(editing, preset) {
+        mutableStateOf(editing?.models?.firstOrNull()?.api ?: preset?.api ?: "openai-completions")
     }
 
     var fetching by remember { mutableStateOf(false) }
