@@ -21,8 +21,8 @@ android {
     applicationId = "com.self.zai"
     minSdk = 29
     targetSdk = 35
-    versionCode = 7
-    versionName = "0.1.6"
+    versionCode = 8
+    versionName = "0.1.7"
   }
 
   signingConfigs {
@@ -67,6 +67,10 @@ android {
       excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
   }
+
+  testOptions {
+    unitTests.isReturnDefaultValues = true
+  }
 }
 
 kotlin {
@@ -98,4 +102,5 @@ dependencies {
 
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
+  testImplementation("org.json:json:20240303")
 }

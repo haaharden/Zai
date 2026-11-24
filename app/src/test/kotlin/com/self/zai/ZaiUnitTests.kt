@@ -80,6 +80,26 @@ class ZaiUnitTests {
     }
 
     @Test
+    fun parseModelsPayload_extractsProviderReasoningEfforts() {
+        val payload = """
+            {
+              "data": [
+                {
+                  "id": "custom-reasoner",
+                  "context_length": 200000,
+                  "reasoning_efforts": ["low", "medium", "high", "max"]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val models = ModelDiscoveryClient.parseModelsPayload(payload)
+        assertEquals(1, models.size)
+        assertEquals(listOf("low", "medium", "high", "max"), models.first().efforts)
+        assertTrue(models.first().reasoning == true)
+    }
+
+    @Test
     fun isRemoteVersionNewer_comparesSemverProperly() {
         assertTrue(AppUpdater.isRemoteVersionNewer("0.1.0", "v0.1.1"))
         assertTrue(AppUpdater.isRemoteVersionNewer("0.1.0", "0.2.0"))

@@ -13,35 +13,37 @@ import javax.crypto.spec.GCMParameterSpec
 /**
  * Stores sensitive tokens (ChatGPT OAuth credentials, custom API keys) encrypted via Android Keystore AES-256-GCM.
  */
-class SecureStore(context: Context) {
+class SecureStore(context: Context) : CredentialVault {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun putString(key: String, value: String) {
-        val encrypted = encrypt(value.toByteArray(Charsets.UTF_8))
-        prefs.edit().putString(key, encrypted).apply()
+    override fun putString(key: String, value: String) {
+        runCatching {
+            val encrypted = encrypt(value.toByteArray(Charsets.UTF_8))
+            prefs.edit().putString(key, encrypted).apply()
+        }
     }
 
-    fun getString(key: String): String? {
+    override fun getString(key: String): String? {
         val raw = prefs.getString(key, null) ?: return null
         return runCatching {
             String(decrypt(raw), Charsets.UTF_8)
         }.getOrNull()
     }
 
-    fun remove(key: String) {
+    override fun remove(key: String) {
         prefs.edit().remove(key).apply()
     }
 
-    fun putProviderApiKey(providerId: String, apiKey: String) {
+    override fun putProviderApiKey(providerId: String, apiKey: String) {
         putString("api_key_$providerId", apiKey)
     }
 
-    fun getProviderApiKey(providerId: String): String? = getString("api_key_$providerId")
+    override fun getProviderApiKey(providerId: String): String? = getString("api_key_$providerId")
 
-    fun removeProviderApiKey(providerId: String) = remove("api_key_$providerId")
+    override fun removeProviderApiKey(providerId: String) = remove("api_key_$providerId")
 
-    fun getAllProviderApiKeys(providerIds: Collection<String>): Map<String, String> =
+    override fun getAllProviderApiKeys(providerIds: Collection<String>): Map<String, String> =
         buildMap {
             for (id in providerIds) {
                 val key = getProviderApiKey(id)
@@ -49,9 +51,9 @@ class SecureStore(context: Context) {
             }
         }
 
-    fun savePiCredentialsJson(json: String) = putString(KEY_PI_CREDS, json)
+    override fun savePiCredentialsJson(json: String) = putString(KEY_PI_CREDS, json)
 
-    fun loadPiCredentialsJson(): String? = getString(KEY_PI_CREDS)
+    override fun loadPiCredentialsJson(): String? = getString(KEY_PI_CREDS)
 
     private fun getOrCreateKey(): SecretKey {
         val ks = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }

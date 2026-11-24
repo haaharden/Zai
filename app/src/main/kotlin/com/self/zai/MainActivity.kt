@@ -26,6 +26,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.self.zai.di.AppContainer
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.phone.ZaiAccessibilityService
 import com.self.zai.ui.chat.ChatScreen
@@ -55,10 +56,11 @@ class MainActivity : ComponentActivity() {
 
         val app = application as ZaiApplication
         setContent {
-            val settings by app.settingsStore.settings.collectAsState()
+            val settings by app.container.sessionRepository.settings.collectAsState()
             ZaiTheme(themeMode = settings.themeMode) {
                 ZaiRoot(
                     app = app,
+                    container = app.container,
                     onOpenBrowserUrl = { url -> openAuthUrl(url) },
                     onShowToast = { msg -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() },
                 )
@@ -68,17 +70,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        val app = application as ZaiApplication
-        app.agentCoordinator.isAppInForeground = true
-        app.shizukuBridge.refreshStatus()
-        if (app.shizukuBridge.status.value.binderAlive && app.shizukuBridge.status.value.permissionGranted) {
-            app.shizukuBridge.bindAsync()
+        val container = (application as ZaiApplication).container
+        container.agentCoordinator.isAppInForeground = true
+        container.shizukuBridge.refreshStatus()
+        if (container.shizukuBridge.status.value.binderAlive &&
+            container.shizukuBridge.status.value.permissionGranted
+        ) {
+            container.shizukuBridge.bindAsync()
         }
     }
 
     override fun onPause() {
-        val app = application as ZaiApplication
-        app.agentCoordinator.isAppInForeground = false
+        val container = (application as ZaiApplication).container
+        container.agentCoordinator.isAppInForeground = false
         super.onPause()
     }
 
@@ -99,21 +103,25 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun ZaiRoot(
     app: ZaiApplication,
+    container: AppContainer,
     onOpenBrowserUrl: (String) -> Unit,
     onShowToast: (String) -> Unit,
 ) {
-    val coordinator = app.agentCoordinator
-    val settings by app.settingsStore.settings.collectAsState()
-    val sessions by app.settingsStore.sessions.collectAsState()
+    val coordinator = container.agentCoordinator
+    val runtime = container.agentRuntime
+    val repository = container.sessionRepository
+
+    val settings by repository.settings.collectAsState()
+    val sessions by repository.sessions.collectAsState()
     val activeSessionId by coordinator.activeSessionId.collectAsState()
-    val providers by app.piEngine.providers.collectAsState()
-    val piReady by app.piEngine.isReady.collectAsState()
-    val piVersion by app.piEngine.piVersion.collectAsState()
-    val hotUpdateTag by app.piEngine.hotUpdateTag.collectAsState()
-    val authState by app.piEngine.authState.collectAsState()
+    val providers by runtime.providers.collectAsState()
+    val piReady by runtime.isReady.collectAsState()
+    val piVersion by runtime.piVersion.collectAsState()
+    val hotUpdateTag by runtime.hotUpdateTag.collectAsState()
+    val authState by runtime.authState.collectAsState()
     val isRunning by coordinator.isRunning.collectAsState()
     val liveStepLabel by coordinator.liveStepLabel.collectAsState()
-    val shizukuStatus by app.shizukuBridge.status.collectAsState()
+    val shizukuStatus by container.shizukuBridge.status.collectAsState()
     val accessibilityConnected by ZaiAccessibilityService.isConnected.collectAsState()
     val pendingConfirmation by coordinator.phoneController.pendingConfirmation.collectAsState()
 
@@ -199,12 +207,12 @@ private fun ZaiRoot(
                         activeModel = defaultModel,
                         authState = authState,
                         onSelectModel = { pid, mid -> coordinator.selectDefaultModel(pid, mid) },
-                        onStartChatGptLogin = { method -> app.piEngine.startChatGptLogin(method) },
-                        onCancelLogin = { app.piEngine.cancelLogin() },
-                        onSubmitAuthPrompt = { id, value -> app.piEngine.submitAuthPrompt(id, value) },
-                        onLogoutChatGpt = { app.piEngine.logoutProvider("openai-codex") },
+                        onStartChatGptLogin = { method -> runtime.startChatGptLogin(method) },
+                        onCancelLogin = { runtime.cancelLogin() },
+                        onSubmitAuthPrompt = { id, value -> runtime.submitAuthPrompt(id, value) },
+                        onLogoutChatGpt = { runtime.logoutProvider("openai-codex") },
                         onOpenBrowserUrl = onOpenBrowserUrl,
-                        onLookupCatalogMetadata = { ids, cb -> app.piEngine.lookupModels(ids, cb) },
+                        onLookupCatalogMetadata = { ids, cb -> runtime.lookupModels(ids, cb) },
                         onSaveCustomProvider = { existingId, name, baseUrl, apiKey, models, defaultImages ->
                             coordinator.saveCustomProvider(existingId, name, baseUrl, apiKey, models, defaultImages)
                             onShowToast("已保存渠道")
@@ -213,7 +221,7 @@ private fun ZaiRoot(
                             coordinator.deleteCustomProvider(id)
                             onShowToast("已删除渠道")
                         },
-                        onGetSavedApiKey = { id -> app.secureStore.getProviderApiKey(id) },
+                        onGetSavedApiKey = { id -> container.credentialVault.getProviderApiKey(id) },
                         onBack = { route = OverlayRoute.NONE },
                     )
 
@@ -228,19 +236,19 @@ private fun ZaiRoot(
                         shizukuStatus = shizukuStatus,
                         accessibilityConnected = accessibilityConnected,
                         onReleaseChecked = { latestRelease = it },
-                        onUpdateSettings = { app.settingsStore.updateSettings(it) },
+                        onUpdateSettings = { repository.updateSettings(it) },
                         onSelectDefaultModel = { pid, mid -> coordinator.selectDefaultModel(pid, mid) },
                         onSelectDefaultThinking = { lvl -> coordinator.selectDefaultThinkingLevel(lvl) },
                         onOpenModels = { route = OverlayRoute.MODELS },
                         onRequestShizuku = {
-                            if (!app.shizukuBridge.requestPermission()) {
+                            if (!container.shizukuBridge.requestPermission()) {
                                 onShowToast("请先打开 Shizuku 并启动服务")
                             }
                         },
-                        onTestShizuku = { app.shizukuBridge.exec("id", 4_000) },
+                        onTestShizuku = { container.shizukuBridge.exec("id", 4_000) },
                         onRepairAccessibility = { coordinator.repairAccessibilityWithShizuku() },
                         onShizukuInstallApk = { file ->
-                            AppUpdater.installApkViaShizuku(app, app.shizukuBridge, file)
+                            AppUpdater.installApkViaShizuku(app, container.shizukuBridge, file)
                         },
                         onReloadPiHotUpdate = { coordinator.reloadPiEngine(resetToBundled = false) },
                         onResetPiHotUpdate = { coordinator.reloadPiEngine(resetToBundled = true) },
