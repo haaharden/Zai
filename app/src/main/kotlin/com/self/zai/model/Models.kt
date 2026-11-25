@@ -24,6 +24,13 @@ enum class PerceptionMode {
 }
 
 @Serializable
+enum class TtsReadoutMode {
+    OFF,
+    HEADSET_ONLY,
+    ALWAYS,
+}
+
+@Serializable
 data class CustomModelEntry(
     val id: String,
     val contextWindow: Int = 128_000,
@@ -86,6 +93,9 @@ data class AppSettings(
     val userSystemPrompt: String = "",
     val skills: List<SkillEntry> = emptyList(),
     val mcpServers: List<McpServerConfig> = emptyList(),
+    val assistantAutoListen: Boolean = true,
+    val assistantAttachScreenDefault: Boolean = false,
+    val assistantTtsMode: TtsReadoutMode = TtsReadoutMode.HEADSET_ONLY,
 )
 
 data class ModelOption(

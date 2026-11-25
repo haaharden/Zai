@@ -29,6 +29,7 @@ class PhoneController(
     val toolRegistry: PhoneToolRegistry = PhoneToolRegistry.default(),
     private val safetyGuard: SafetyGuard = SafetyGuard(),
     private val onStepProgress: (stepNumber: Int, label: String) -> Unit = { _, _ -> },
+    private val onNativeToolActivity: (label: String) -> Unit = {},
 ) : PiToolHandler, PhoneToolContext {
 
     private val stepCount = AtomicInteger(0)
@@ -88,10 +89,14 @@ class PhoneController(
         tool: String,
         args: JSONObject,
     ): ToolExecutionResult {
-        operatedPhoneThisRun = true
         val plugin = toolRegistry.get(tool)
             ?: return ToolExecutionResult("未知工具: $tool", isError = true)
-        onStepProgress(stepCount.get().coerceAtLeast(1), plugin.humanLabel(args))
+        if (plugin.interactsWithScreen) {
+            operatedPhoneThisRun = true
+            onStepProgress(stepCount.get().coerceAtLeast(1), plugin.humanLabel(args))
+        } else {
+            onNativeToolActivity("正在${plugin.humanLabel(args)}…")
+        }
         return plugin.execute(this, args)
     }
 

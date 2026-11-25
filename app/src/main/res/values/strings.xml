@@ -3,4 +3,7 @@
     <string name="app_name">Zai</string>
     <string name="accessibility_service_label">Zai 手机操控</string>
     <string name="accessibility_service_description">用于读取当前屏幕控件并在你发起任务时执行点击、滑动和输入操作。</string>
+    <string name="assistant_service_label">Zai 个人助手</string>
+    <string name="assistant_tile_label">Z 助手</string>
+    <string name="notification_listener_label">Zai 通知摘要</string>
 </resources>

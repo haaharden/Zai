@@ -29,6 +29,8 @@ interface PhoneTool {
     val label: String
     val description: String
     val requiresVision: Boolean get() = false
+    /** True if executing this tool interacts with or switches the visible screen UI. */
+    val interactsWithScreen: Boolean get() = true
     val requiredParams: List<String> get() = emptyList()
 
     fun parametersSchema(): JSONObject = JSONObject()
@@ -79,6 +81,10 @@ class PhoneToolRegistry(tools: List<PhoneTool>) {
         ordered[toolName]?.humanLabel(args) ?: toolName
 
     companion object {
-        fun default(): PhoneToolRegistry = PhoneToolRegistry(builtInPhoneTools())
+        fun default(
+            assistantBackend: SystemAssistantBackend = UnavailableSystemAssistantBackend,
+        ): PhoneToolRegistry = PhoneToolRegistry(
+            builtInPhoneTools() + assistantNativeTools(assistantBackend),
+        )
     }
 }

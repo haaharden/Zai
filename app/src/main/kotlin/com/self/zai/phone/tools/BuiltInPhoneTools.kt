@@ -278,6 +278,7 @@ private object ListAppsTool : PhoneTool {
     override val name = "list_apps"
     override val label = "查找应用"
     override val description = "按关键词搜索手机已安装的可启动应用，返回名称与包名。"
+    override val interactsWithScreen = false
 
     override fun parametersSchema(): JSONObject = JSONObject().put(
         "query",

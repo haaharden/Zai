@@ -3,6 +3,7 @@ package com.self.zai.permission
 import android.Manifest
 import android.app.AppOpsManager
 import android.app.NotificationManager
+import android.app.role.RoleManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -13,6 +14,8 @@ import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import com.self.zai.assistant.ZaiAssistActivity
+import com.self.zai.assistant.ZaiNotificationListenerService
 import com.self.zai.phone.ZaiAccessibilityService
 
 object DevicePermissionHelper {
@@ -58,6 +61,62 @@ object DevicePermissionHelper {
             context,
             Manifest.permission.WRITE_SECURE_SETTINGS,
         ) == PackageManager.PERMISSION_GRANTED
+
+    fun hasAudioPermission(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO,
+        ) == PackageManager.PERMISSION_GRANTED
+
+    fun isDefaultAssistant(context: Context): Boolean {
+        val roleHeld = runCatching {
+            val rm = context.getSystemService(Context.ROLE_SERVICE) as? RoleManager
+            rm?.isRoleHeld(RoleManager.ROLE_ASSISTANT) == true
+        }.getOrDefault(false)
+        if (roleHeld) return true
+        val secureAssist = runCatching {
+            Settings.Secure.getString(context.contentResolver, "assistant").orEmpty()
+        }.getOrDefault("")
+        val secureVoice = runCatching {
+            Settings.Secure.getString(context.contentResolver, "voice_interaction_service").orEmpty()
+        }.getOrDefault("")
+        return secureAssist.startsWith("${context.packageName}/") ||
+            secureVoice.startsWith("${context.packageName}/")
+    }
+
+    fun isNotificationListenerEnabled(context: Context): Boolean {
+        val expected = ComponentName(context, ZaiNotificationListenerService::class.java).flattenToString()
+        val raw = runCatching {
+            Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+        }.getOrNull().orEmpty()
+        return raw.split(":").any {
+            it.equals(expected, ignoreCase = true) ||
+                it.contains("${context.packageName}/.assistant.ZaiNotificationListenerService", ignoreCase = true)
+        }
+    }
+
+    fun openVoiceInputSettings(context: Context) {
+        val ok = startSafe(context, Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)) ||
+            startSafe(context, Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+        if (!ok) openAppDetails(context)
+    }
+
+    fun openNotificationListenerSettings(context: Context) {
+        val ok = startSafe(context, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        if (!ok) openAppDetails(context)
+    }
+
+    fun openAssistOverlayPreview(context: Context) {
+        val intent = Intent(context, ZaiAssistActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS,
+            )
+            putExtra(ZaiAssistActivity.EXTRA_FROM_ASSISTANT, true)
+        }
+        startSafe(context, intent)
+    }
 
     /**
      * Checks Xiaomi MIUI/HyperOS proprietary OP_BACKGROUND_START_ACTIVITY (op 10021).

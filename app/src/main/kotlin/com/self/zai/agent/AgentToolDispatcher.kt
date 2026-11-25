@@ -43,6 +43,12 @@ class AgentToolDispatcher(
     fun isPhoneTool(toolName: String): Boolean =
         toolName != READ_SKILL_TOOL && !toolName.startsWith(MCP_PREFIX)
 
+    /** True only when the tool interacts with the visible screen (triggers operating chrome / dismisses overlay). */
+    fun isScreenOperatingTool(toolName: String): Boolean {
+        if (!isPhoneTool(toolName)) return false
+        return phoneController.toolRegistry.get(toolName)?.interactsWithScreen != false
+    }
+
     fun humanLabel(toolName: String, args: JSONObject): String = when {
         toolName == READ_SKILL_TOOL -> "加载技能 ${args.optString("name")}"
         toolName.startsWith(MCP_PREFIX) -> {

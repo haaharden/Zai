@@ -64,6 +64,7 @@ import com.self.zai.model.PerceptionMode
 import com.self.zai.model.ProviderStatus
 import com.self.zai.model.ThemeMode
 import com.self.zai.model.ThinkingLevelDisplay
+import com.self.zai.model.TtsReadoutMode
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.shell.ShizukuStatus
 import com.self.zai.ui.capabilities.UserPromptEditorSheet
@@ -120,6 +121,8 @@ fun SettingsScreen(
     var a11ySettingOn by remember { mutableStateOf(DevicePermissionHelper.isAccessibilityEnabledInSettings(context)) }
     var hasWriteSecure by remember { mutableStateOf(DevicePermissionHelper.hasWriteSecureSettings(context)) }
     var hasXiaomiBgPopup by remember { mutableStateOf(DevicePermissionHelper.hasXiaomiBgPopupPermission(context)) }
+    var isDefaultAssistant by remember { mutableStateOf(DevicePermissionHelper.isDefaultAssistant(context)) }
+    var hasNotifListener by remember { mutableStateOf(DevicePermissionHelper.isNotificationListenerEnabled(context)) }
     var showDefaultModelSheet by remember { mutableStateOf(false) }
     var showUserPromptSheet by remember { mutableStateOf(false) }
 
@@ -146,6 +149,8 @@ fun SettingsScreen(
                 a11ySettingOn = DevicePermissionHelper.isAccessibilityEnabledInSettings(context)
                 hasWriteSecure = DevicePermissionHelper.hasWriteSecureSettings(context)
                 hasXiaomiBgPopup = DevicePermissionHelper.hasXiaomiBgPopupPermission(context)
+                isDefaultAssistant = DevicePermissionHelper.isDefaultAssistant(context)
+                hasNotifListener = DevicePermissionHelper.isNotificationListenerEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -323,6 +328,77 @@ fun SettingsScreen(
                         "已启用 ${enabledServers.size} 个服务，共 $totalMcpTools 个工具"
                     },
                     onClick = onOpenMcpServers,
+                )
+            }
+
+            // 2.5 System Personal Assistant & Voice
+            ZaiPaperGroup(title = "系统助手与语音") {
+                StatusActionRow(
+                    dotColor = if (isDefaultAssistant) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
+                    title = "系统默认数字助手",
+                    subtitle = if (isDefaultAssistant) {
+                        "已设为默认助手，支持长按电源键 0.5 秒或控制中心磁贴呼出浮层"
+                    } else {
+                        "设为默认数字助手后，可替代系统助手并直接呼出 Zai 浮层"
+                    },
+                    actionLabel = if (isDefaultAssistant) "试呼出" else "去设置",
+                    onAction = {
+                        if (isDefaultAssistant) {
+                            DevicePermissionHelper.openAssistOverlayPreview(context)
+                        } else {
+                            DevicePermissionHelper.openVoiceInputSettings(context)
+                        }
+                    },
+                )
+
+                ZaiInsetDivider()
+
+                ToggleRow(
+                    title = "呼出浮层时自动语音收音",
+                    subtitle = "长按电源键打开 Zai 浮层后直接开始听写，无需再点麦克风",
+                    checked = settings.assistantAutoListen,
+                    onCheckedChange = { v -> onUpdateSettings { it.copy(assistantAutoListen = v) } },
+                )
+
+                ZaiInsetDivider()
+
+                ToggleRow(
+                    title = "浮层默认附带当前屏幕",
+                    subtitle = "开启后呼出即自动带上当前页面文本，也可在浮层顶部单次切换",
+                    checked = settings.assistantAttachScreenDefault,
+                    onCheckedChange = { v -> onUpdateSettings { it.copy(assistantAttachScreenDefault = v) } },
+                )
+
+                ZaiInsetDivider()
+
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("浮层回复语音播报", style = MaterialTheme.typography.titleSmall)
+                    ZaiSegmentedControl(
+                        options = listOf(
+                            TtsReadoutMode.OFF to "关闭",
+                            TtsReadoutMode.HEADSET_ONLY to "仅耳机",
+                            TtsReadoutMode.ALWAYS to "总是播报",
+                        ),
+                        selected = settings.assistantTtsMode,
+                        onSelect = { m -> onUpdateSettings { it.copy(assistantTtsMode = m) } },
+                    )
+                }
+
+                ZaiInsetDivider()
+
+                StatusActionRow(
+                    dotColor = if (hasNotifListener) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
+                    title = "通知读取权限（可选）",
+                    subtitle = if (hasNotifListener) {
+                        "已开启，可直接让 Zai 汇总或查询通知栏消息"
+                    } else {
+                        "开启后可问 Zai「刚才有什么重要通知」"
+                    },
+                    actionLabel = if (hasNotifListener) "已开启" else "去开启",
+                    onAction = { DevicePermissionHelper.openNotificationListenerSettings(context) },
                 )
             }
 

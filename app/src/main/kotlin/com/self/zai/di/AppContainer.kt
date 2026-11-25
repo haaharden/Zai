@@ -8,6 +8,7 @@ import com.self.zai.agent.AndroidAppReturnNavigator
 import com.self.zai.agent.AppReturnNavigator
 import com.self.zai.agent.ModelSelectionManager
 import com.self.zai.agent.RunChromeHost
+import com.self.zai.assistant.AssistantContextBridge
 import com.self.zai.data.CredentialVault
 import com.self.zai.data.SecureStore
 import com.self.zai.data.SessionRepository
@@ -22,6 +23,7 @@ import com.self.zai.phone.SafetyGuard
 import com.self.zai.phone.ZaiAccessibilityService
 import com.self.zai.phone.channel.AndroidCompositeDeviceChannel
 import com.self.zai.phone.channel.PhoneDeviceChannel
+import com.self.zai.phone.tools.AndroidSystemAssistantBackend
 import com.self.zai.phone.tools.PhoneToolRegistry
 import com.self.zai.pi.AgentRuntime
 import com.self.zai.pi.PiEngine
@@ -42,7 +44,8 @@ class AppContainer(context: Context) {
     val shizukuBridge: ShizukuBridge = ShizukuBridge(appContext)
     val agentRuntime: AgentRuntime = PiEngine(appContext, credentialVault)
     val appDirectory: AppDirectory = AndroidAppDirectory(appContext)
-    val toolRegistry: PhoneToolRegistry = PhoneToolRegistry.default()
+    val assistantBackend = AndroidSystemAssistantBackend(appContext, appDirectory)
+    val toolRegistry: PhoneToolRegistry = PhoneToolRegistry.default(assistantBackend)
     val safetyGuard: SafetyGuard = SafetyGuard()
     val mcpClient: McpToolClient = StreamableHttpMcpClient()
     val returnNavigator: AppReturnNavigator = AndroidAppReturnNavigator(appContext, shizukuBridge)
@@ -101,6 +104,7 @@ class AppContainer(context: Context) {
         toolRegistry = toolRegistry,
         safetyGuard = safetyGuard,
         onStepProgress = { _, _ -> coordinatorRef?.onPhoneOperationStep() },
+        onNativeToolActivity = { label -> coordinatorRef?.onNonPhoneToolActivity(label) },
     )
 
     val toolDispatcher: AgentToolDispatcher = AgentToolDispatcher(
@@ -137,6 +141,7 @@ class AppContainer(context: Context) {
             val component = ComponentName(appContext, ZaiAccessibilityService::class.java).flattenToString()
             shizukuBridge.restoreAccessibilityService(component)
         },
+        onDismissAssistantOverlay = { AssistantContextBridge.requestDismissOverlay() },
     ).also { coordinatorRef = it }
 
     fun startRuntime() {

@@ -3,9 +3,10 @@
 -keep class rikka.shizuku.** { *; }
 -dontwarn rikka.shizuku.**
 
-# Keep AccessibilityService & foreground service entrypoints
+# Keep AccessibilityService, foreground service, and system assistant entrypoints
 -keep class com.self.zai.phone.ZaiAccessibilityService { *; }
 -keep class com.self.zai.service.ZaiAgentService { *; }
+-keep class com.self.zai.assistant.** { *; }
 
 # Keep kotlinx.serialization generated serializers
 -keepattributes *Annotation*, InnerClasses, Signature

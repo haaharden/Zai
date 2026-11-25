@@ -59,6 +59,7 @@ class AgentCoordinator(
     private val chromeHost: RunChromeHost,
     private val onStartRuntimeExtra: () -> Unit = {},
     private val onRepairAccessibility: suspend () -> Result<Unit> = { Result.failure(UnsupportedOperationException()) },
+    private val onDismissAssistantOverlay: () -> Unit = {},
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
@@ -292,6 +293,7 @@ class AgentCoordinator(
     }
 
     fun onPhoneOperationStep() {
+        onDismissAssistantOverlay()
         _liveStepLabel.value = "正在操作手机"
         val s = repository.settings.value
         if (s.showFloatingCapsule || s.showEdgeGlow) {
@@ -303,7 +305,7 @@ class AgentCoordinator(
         chromeHost.updateForegroundStatus("正在操作手机")
     }
 
-    fun sendUserMessage(rawText: String): Result<Unit> {
+    fun sendUserMessage(rawText: String, extraContextForModel: String? = null): Result<Unit> {
         val text = rawText.trim()
         if (text.isEmpty()) return Result.success(Unit)
         if (!runtime.isReady.value) {
@@ -322,7 +324,7 @@ class AgentCoordinator(
             rawMessage = text,
             enabledSkills = currentSettings.skills.filter { it.enabled },
         )
-        val promptForPi = if (slashMatch != null) {
+        val basePrompt = if (slashMatch != null) {
             buildString {
                 appendLine("请严格按照以下已激活的技能「${slashMatch.skill.name}」指引处理本次请求：")
                 appendLine(slashMatch.skill.instructions)
@@ -332,6 +334,16 @@ class AgentCoordinator(
             }
         } else {
             text
+        }
+        val promptForPi = if (!extraContextForModel.isNullOrBlank()) {
+            buildString {
+                appendLine("[用户附带的当前屏幕内容]")
+                appendLine(extraContextForModel.trim())
+                appendLine()
+                append(basePrompt)
+            }
+        } else {
+            basePrompt
         }
 
         val userMsg = ChatMessage(
@@ -510,7 +522,7 @@ class AgentCoordinator(
                     }
 
                     is PiSessionEvent.ToolStart -> {
-                        if (toolDispatcher.isPhoneTool(event.tool)) {
+                        if (toolDispatcher.isScreenOperatingTool(event.tool)) {
                             val label = toolDispatcher.humanLabel(event.tool, event.args)
                             _liveStepLabel.value = "正在操作手机"
                             val step = ActionStep(
@@ -523,10 +535,10 @@ class AgentCoordinator(
                                 msg.copy(steps = msg.steps + step)
                             }
                         } else {
-                            _liveStepLabel.value = if (event.tool == AgentToolDispatcher.READ_SKILL_TOOL) {
-                                "正在读取技能…"
-                            } else {
-                                "正在调用 MCP 工具…"
+                            _liveStepLabel.value = when {
+                                event.tool == AgentToolDispatcher.READ_SKILL_TOOL -> "正在读取技能…"
+                                event.tool.startsWith(AgentToolDispatcher.MCP_PREFIX) -> "正在调用 MCP 工具…"
+                                else -> "正在${toolDispatcher.humanLabel(event.tool, event.args)}…"
                             }
                         }
                     }
