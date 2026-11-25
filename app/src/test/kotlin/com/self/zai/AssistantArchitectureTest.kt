@@ -21,6 +21,7 @@ import com.self.zai.model.McpServerConfig
 import com.self.zai.model.McpToolSummary
 import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
+import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.model.TtsReadoutMode
 import com.self.zai.phone.AppDirectory
@@ -320,6 +321,7 @@ class AssistantArchitectureTest {
             ),
         )
         override val authState = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
+        override val providerQuotas: StateFlow<Map<String, ProviderQuota>> = MutableStateFlow(emptyMap())
         override val events: SharedFlow<PiSessionEvent> = MutableSharedFlow(extraBufferCapacity = 16)
         override var toolHandler: PiToolHandler? = null
         var lastPromptText: String = ""
@@ -329,6 +331,7 @@ class AssistantArchitectureTest {
         override fun resetToBundledPi() {}
         override suspend fun awaitReady() {}
         override fun syncCustomProviders(customProviders: List<CustomProviderConfig>) {}
+        override fun refreshProviderQuota(providerId: String, force: Boolean) {}
         override fun startChatGptLogin(method: String) {}
         override fun cancelLogin() {}
         override fun submitAuthPrompt(promptId: String, value: String) {}
@@ -343,8 +346,11 @@ class AssistantArchitectureTest {
             systemPrompt: String,
             toolSpecsJson: JSONArray,
             savedMessagesJson: String?,
+            compactionMode: String,
+            compactionThresholdPercent: Int,
         ) {}
         override fun prompt(sessionId: String, text: String) { lastPromptText = text }
+        override fun compactSession(sessionId: String) {}
         override fun abort(sessionId: String) {}
         override fun disposeSession(sessionId: String) {}
         override fun lookupModels(ids: List<String>, onResult: (Map<String, Triple<Int, Boolean, Boolean>>) -> Unit) {}

@@ -14,12 +14,15 @@ import com.self.zai.mcp.McpToolClient
 import com.self.zai.model.AppSettings
 import com.self.zai.model.AuthUiState
 import com.self.zai.model.ChatSession
+import com.self.zai.model.CompactionMode
 import com.self.zai.model.CustomProviderConfig
 import com.self.zai.model.McpServerConfig
 import com.self.zai.model.McpToolSummary
 import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
+import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
+import com.self.zai.model.SessionContextUsage
 import com.self.zai.phone.AppDirectory
 import com.self.zai.phone.PhoneController
 import com.self.zai.phone.ScreenSnapshot
@@ -250,6 +253,33 @@ class AgentCoordinatorTest {
         assertEquals(1, chrome.fgsStartCount)
         runtime.emit(PiSessionEvent.Idle(sid))
         assertEquals(1, chrome.fgsStopCount)
+
+        // Compaction settings update invalidates config & tracks ContextUsage events
+        coordinator.updateCompactionSettings(CompactionMode.AUTO, 65)
+        assertEquals(CompactionMode.AUTO, repo.settings.value.compactionMode)
+        assertEquals(65, repo.settings.value.compactionThresholdPercent)
+
+        runtime.emit(
+            PiSessionEvent.ContextUsage(
+                sessionId = sid,
+                usage = SessionContextUsage(
+                    estimatedTokens = 64_000,
+                    contextWindow = 500_000,
+                    percent = 13,
+                    archivedBlocks = 1,
+                    mode = CompactionMode.AUTO,
+                    thresholdPercent = 65,
+                ),
+            ),
+        )
+        assertEquals(13, coordinator.sessionContextUsages.value[sid]?.percent)
+        assertEquals(1, coordinator.sessionContextUsages.value[sid]?.archivedBlocks)
+
+        // Manual compaction delegates cleanly to runtime once enough messages exist
+        assertTrue(coordinator.compactActiveSession().isSuccess)
+        assertEquals(1, runtime.compactCount)
+        assertEquals("auto", runtime.lastCompactionMode)
+        assertEquals(65, runtime.lastCompactionThreshold)
     }
 
     private class InMemorySessionRepository : SessionRepository {
@@ -293,12 +323,16 @@ class AgentCoordinatorTest {
         override val hotUpdateTag = MutableStateFlow<String?>(null)
         private val _providers = MutableStateFlow<List<ProviderStatus>>(emptyList())
         override val providers: StateFlow<List<ProviderStatus>> = _providers
+        override val providerQuotas: StateFlow<Map<String, ProviderQuota>> = MutableStateFlow(emptyMap())
         override val authState = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
         private val _events = MutableSharedFlow<PiSessionEvent>(extraBufferCapacity = 64)
         override val events: SharedFlow<PiSessionEvent> = _events
         override var toolHandler: PiToolHandler? = null
 
         var configureCount = 0
+        var compactCount = 0
+        var lastCompactionMode = ""
+        var lastCompactionThreshold = 0
 
         fun setProviders(list: List<ProviderStatus>) { _providers.value = list }
         fun emit(ev: PiSessionEvent) { _events.tryEmit(ev) }
@@ -308,6 +342,7 @@ class AgentCoordinatorTest {
         override fun resetToBundledPi() {}
         override suspend fun awaitReady() {}
         override fun syncCustomProviders(customProviders: List<CustomProviderConfig>) {}
+        override fun refreshProviderQuota(providerId: String, force: Boolean) {}
         override fun startChatGptLogin(method: String) {}
         override fun cancelLogin() {}
         override fun submitAuthPrompt(promptId: String, value: String) {}
@@ -322,10 +357,15 @@ class AgentCoordinatorTest {
             systemPrompt: String,
             toolSpecsJson: JSONArray,
             savedMessagesJson: String?,
+            compactionMode: String,
+            compactionThresholdPercent: Int,
         ) {
             configureCount++
+            lastCompactionMode = compactionMode
+            lastCompactionThreshold = compactionThresholdPercent
         }
         override fun prompt(sessionId: String, text: String) {}
+        override fun compactSession(sessionId: String) { compactCount++ }
         override fun abort(sessionId: String) {}
         override fun disposeSession(sessionId: String) {}
         override fun lookupModels(ids: List<String>, onResult: (Map<String, Triple<Int, Boolean, Boolean>>) -> Unit) {

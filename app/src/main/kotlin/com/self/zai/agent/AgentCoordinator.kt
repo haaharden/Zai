@@ -7,12 +7,14 @@ import com.self.zai.mcp.StreamableHttpMcpClient
 import com.self.zai.model.ActionStep
 import com.self.zai.model.ChatMessage
 import com.self.zai.model.ChatSession
+import com.self.zai.model.CompactionMode
 import com.self.zai.model.CustomModelEntry
 import com.self.zai.model.CustomProviderConfig
 import com.self.zai.model.McpServerConfig
 import com.self.zai.model.McpToolSummary
 import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
+import com.self.zai.model.SessionContextUsage
 import com.self.zai.model.SkillEntry
 import com.self.zai.model.StepState
 import com.self.zai.phone.PhoneController
@@ -23,8 +25,11 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -77,6 +82,12 @@ class AgentCoordinator(
 
     private val _liveStepLabel = MutableStateFlow("")
     val liveStepLabel: StateFlow<String> = _liveStepLabel.asStateFlow()
+
+    private val _sessionContextUsages = MutableStateFlow<Map<String, SessionContextUsage>>(emptyMap())
+    val sessionContextUsages: StateFlow<Map<String, SessionContextUsage>> = _sessionContextUsages.asStateFlow()
+
+    private val _compactionNotices = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val compactionNotices: SharedFlow<String> = _compactionNotices.asSharedFlow()
 
     @Volatile
     var isAppInForeground: Boolean = true
@@ -156,6 +167,7 @@ class AgentCoordinator(
         }
         runtime.disposeSession(sessionId)
         configuredSessions.remove(sessionId)
+        _sessionContextUsages.value = _sessionContextUsages.value - sessionId
         repository.deleteSession(sessionId)
         if (_activeSessionId.value == sessionId) {
             _activeSessionId.value = ensureInitialSession().id
@@ -209,6 +221,52 @@ class AgentCoordinator(
     fun updateUserSystemPrompt(prompt: String) {
         repository.updateSettings { it.copy(userSystemPrompt = prompt.trim()) }
         configuredSessions.clear()
+    }
+
+    fun updateCompactionSettings(mode: CompactionMode, thresholdPercent: Int) {
+        val clamped = thresholdPercent.coerceIn(40, 95)
+        repository.updateSettings {
+            it.copy(
+                compactionMode = mode,
+                compactionThresholdPercent = clamped,
+            )
+        }
+        configuredSessions.clear()
+    }
+
+    fun compactActiveSession(): Result<Unit> {
+        if (_isRunning.value) {
+            return Result.failure(IllegalStateException("当前正在生成回复，请稍候再压缩"))
+        }
+        if (!runtime.isReady.value) {
+            return Result.failure(IllegalStateException("Pi 引擎正在初始化"))
+        }
+        val session = currentSession()
+        if (session.messages.size < 4) {
+            return Result.failure(IllegalStateException("当前对话较短，暂无需压缩"))
+        }
+        val model = sessionModelOption(session)
+            ?: return Result.failure(IllegalStateException("请先配置可用模型"))
+        val thinking = sessionThinkingLevel(session, model)
+        val currentSettings = repository.settings.value
+        val capabilityFingerprint = SystemPromptBuilder.configFingerprint(currentSettings, model.supportsImages)
+        val configKey = "${model.providerId}/${model.id}/$thinking/$capabilityFingerprint"
+        if (configuredSessions[session.id] != configKey) {
+            runtime.configureSession(
+                sessionId = session.id,
+                providerId = model.providerId,
+                modelId = model.id,
+                thinkingLevel = thinking,
+                systemPrompt = SystemPromptBuilder.build(currentSettings, model.supportsImages),
+                toolSpecsJson = toolDispatcher.buildToolSpecs(currentSettings, includeVisionTools = model.supportsImages),
+                savedMessagesJson = session.piTranscriptJson,
+                compactionMode = currentSettings.compactionMode.toWire(),
+                compactionThresholdPercent = currentSettings.compactionThresholdPercent,
+            )
+            configuredSessions[session.id] = configKey
+        }
+        runtime.compactSession(session.id)
+        return Result.success(Unit)
     }
 
     fun saveSkill(
@@ -441,6 +499,8 @@ class AgentCoordinator(
                 systemPrompt = SystemPromptBuilder.build(currentSettings, model.supportsImages),
                 toolSpecsJson = toolDispatcher.buildToolSpecs(currentSettings, includeVisionTools = model.supportsImages),
                 savedMessagesJson = session.piTranscriptJson,
+                compactionMode = currentSettings.compactionMode.toWire(),
+                compactionThresholdPercent = currentSettings.compactionThresholdPercent,
             )
             configuredSessions[sessionId] = configKey
         }
@@ -582,6 +642,9 @@ class AgentCoordinator(
                         } else {
                             _liveStepLabel.value = when {
                                 event.tool == AgentToolDispatcher.READ_SKILL_TOOL -> "正在读取技能…"
+                                event.tool == "context_compress" -> "正在折叠早期上下文…"
+                                event.tool == "context_search" -> "正在检索已压缩历史…"
+                                event.tool == "context_expand" -> "正在展开历史上下文…"
                                 event.tool.startsWith(AgentToolDispatcher.MCP_PREFIX) -> "正在调用 MCP 工具…"
                                 else -> "正在${toolDispatcher.humanLabel(event.tool, event.args)}…"
                             }
@@ -636,6 +699,16 @@ class AgentCoordinator(
                                 updatedAtMs = System.currentTimeMillis(),
                             )
                         }
+                    }
+
+                    is PiSessionEvent.ContextUsage -> {
+                        _sessionContextUsages.value = _sessionContextUsages.value + (event.sessionId to event.usage)
+                    }
+
+                    is PiSessionEvent.ContextCompacted -> {
+                        _compactionNotices.tryEmit(
+                            "已压缩 ${event.foldedCount} 条早期消息 · 上下文降至 ${event.percent}%",
+                        )
                     }
 
                     is PiSessionEvent.Idle -> {

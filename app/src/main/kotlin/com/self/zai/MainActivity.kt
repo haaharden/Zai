@@ -204,18 +204,26 @@ private fun ZaiRoot(
     val sessions by repository.sessions.collectAsState()
     val activeSessionId by coordinator.activeSessionId.collectAsState()
     val providers by runtime.providers.collectAsState()
+    val providerQuotas by runtime.providerQuotas.collectAsState()
     val piReady by runtime.isReady.collectAsState()
     val piVersion by runtime.piVersion.collectAsState()
     val hotUpdateTag by runtime.hotUpdateTag.collectAsState()
     val authState by runtime.authState.collectAsState()
     val isRunning by coordinator.isRunning.collectAsState()
     val liveStepLabel by coordinator.liveStepLabel.collectAsState()
+    val sessionContextUsages by coordinator.sessionContextUsages.collectAsState()
     val shizukuStatus by container.shizukuBridge.status.collectAsState()
     val accessibilityConnected by ZaiAccessibilityService.isConnected.collectAsState()
     val pendingConfirmation by coordinator.phoneController.pendingConfirmation.collectAsState()
 
     var route by remember { mutableStateOf(OverlayRoute.NONE) }
     var latestRelease by remember { mutableStateOf<ReleaseUpdateInfo?>(null) }
+
+    LaunchedEffect(Unit) {
+        coordinator.compactionNotices.collect { notice ->
+            onShowToast(notice)
+        }
+    }
 
     LaunchedEffect(settings.githubUpdateRepo) {
         if (settings.githubUpdateRepo.isNotBlank()) {
@@ -251,9 +259,11 @@ private fun ZaiRoot(
             session = activeSession,
             allSessions = sessions,
             providers = providers,
+            providerQuotas = providerQuotas,
             enabledSkills = enabledSkills,
             sessionModel = sessionModel,
             sessionThinkingLevel = sessionThinkingLevel,
+            contextUsage = sessionContextUsages[activeSession.id],
             piReady = piReady,
             isRunning = isRunning,
             liveStepLabel = liveStepLabel,
@@ -266,6 +276,12 @@ private fun ZaiRoot(
             voiceListenState = voiceListenState,
             onToggleVoiceInput = onToggleVoiceInput,
             onCancelVoiceInput = onCancelVoiceInput,
+            onRefreshQuota = { pid, force -> runtime.refreshProviderQuota(pid, force) },
+            onCompactSession = {
+                coordinator.compactActiveSession().onFailure { err ->
+                    onShowToast(err.message ?: "暂时无法压缩")
+                }
+            },
             onSendMessage = { text ->
                 coordinator.sendUserMessage(text).onFailure { err ->
                     onShowToast(err.message ?: "无法发送消息")
@@ -305,8 +321,10 @@ private fun ZaiRoot(
                     OverlayRoute.MODELS -> ModelsAndAuthScreen(
                         settings = settings,
                         providers = providers,
+                        providerQuotas = providerQuotas,
                         activeModel = defaultModel,
                         authState = authState,
+                        onRefreshQuota = { pid, force -> runtime.refreshProviderQuota(pid, force) },
                         onSelectModel = { pid, mid -> coordinator.selectDefaultModel(pid, mid) },
                         onStartChatGptLogin = { method -> runtime.startChatGptLogin(method) },
                         onCancelLogin = { runtime.cancelLogin() },
@@ -329,6 +347,7 @@ private fun ZaiRoot(
                     OverlayRoute.SETTINGS -> SettingsScreen(
                         settings = settings,
                         providers = providers,
+                        providerQuotas = providerQuotas,
                         defaultModel = defaultModel,
                         defaultThinkingLevel = defaultThinkingLevel,
                         piVersion = piVersion,
@@ -338,6 +357,10 @@ private fun ZaiRoot(
                         accessibilityConnected = accessibilityConnected,
                         onReleaseChecked = { latestRelease = it },
                         onUpdateSettings = { repository.updateSettings(it) },
+                        onUpdateCompaction = { mode, threshold ->
+                            coordinator.updateCompactionSettings(mode, threshold)
+                        },
+                        onRefreshQuota = { pid, force -> runtime.refreshProviderQuota(pid, force) },
                         onSelectDefaultModel = { pid, mid -> coordinator.selectDefaultModel(pid, mid) },
                         onSelectDefaultThinking = { lvl -> coordinator.selectDefaultThinkingLevel(lvl) },
                         onUpdateUserPrompt = { prompt ->

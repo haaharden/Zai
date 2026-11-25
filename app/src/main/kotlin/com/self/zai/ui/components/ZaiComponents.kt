@@ -33,10 +33,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -444,7 +447,7 @@ fun ZaiSecondaryButton(
 }
 
 /**
- * Calligraphic editorial serif "Z." monogram matching Zai's warm terracotta app icon.
+ * Signature minimalist stacked-cards + four-point sparkle mark echoing Zai's porcelain app icon.
  */
 @Composable
 fun ZaiMonogramMark(
@@ -453,56 +456,110 @@ fun ZaiMonogramMark(
     dotColor: Color = MaterialTheme.colorScheme.primary,
     modifier: Modifier = Modifier,
 ) {
+    val sparkColor = MaterialTheme.colorScheme.background
     Canvas(modifier = modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
-        val path = Path().apply {
-            // Sweeping left top serif beak -> crisp top bar -> italic diagonal -> upturned bottom serif tail
-            moveTo(w * 0.12f, h * 0.34f)
-            cubicTo(w * 0.14f, h * 0.20f, w * 0.19f, h * 0.15f, w * 0.30f, h * 0.15f)
-            lineTo(w * 0.74f, h * 0.15f)
-            lineTo(w * 0.31f, h * 0.79f)
-            lineTo(w * 0.54f, h * 0.79f)
-            cubicTo(w * 0.64f, h * 0.79f, w * 0.69f, h * 0.74f, w * 0.73f, h * 0.63f)
-            cubicTo(w * 0.71f, h * 0.79f, w * 0.66f, h * 0.85f, w * 0.55f, h * 0.85f)
-            lineTo(w * 0.09f, h * 0.85f)
-            lineTo(w * 0.52f, h * 0.21f)
-            lineTo(w * 0.30f, h * 0.21f)
-            cubicTo(w * 0.22f, h * 0.21f, w * 0.17f, h * 0.26f, w * 0.12f, h * 0.34f)
-            close()
+        val cardW = w * 0.62f
+        val cardH = h * 0.62f
+        val radius = CornerRadius(w * 0.14f, w * 0.14f)
+
+        // Back warm terracotta card tilted softly counter-clockwise
+        rotate(degrees = -13f, pivot = Offset(w * 0.43f, h * 0.56f)) {
+            drawRoundRect(
+                color = dotColor,
+                topLeft = Offset(w * 0.13f, h * 0.25f),
+                size = Size(cardW, cardH),
+                cornerRadius = radius,
+            )
         }
-        drawPath(path = path, color = tint)
-        drawCircle(
-            color = dotColor,
-            radius = w * 0.078f,
-            center = Offset(w * 0.855f, h * 0.775f),
-        )
+
+        // Front deep ink card tilted gently clockwise
+        rotate(degrees = 11f, pivot = Offset(w * 0.57f, h * 0.48f)) {
+            drawRoundRect(
+                color = tint,
+                topLeft = Offset(w * 0.26f, h * 0.16f),
+                size = Size(cardW, cardH),
+                cornerRadius = radius,
+            )
+            // Crisp four-point spark in the center of the front card
+            val cx = w * 0.57f
+            val cy = h * 0.47f
+            val rOuter = w * 0.175f
+            val rCtrl = w * 0.032f
+            val spark = Path().apply {
+                moveTo(cx, cy - rOuter)
+                quadraticTo(cx + rCtrl, cy - rCtrl, cx + rOuter, cy)
+                quadraticTo(cx + rCtrl, cy + rCtrl, cx, cy + rOuter)
+                quadraticTo(cx - rCtrl, cy + rCtrl, cx - rOuter, cy)
+                quadraticTo(cx - rCtrl, cy - rCtrl, cx, cy - rOuter)
+                close()
+            }
+            drawPath(path = spark, color = sparkColor)
+        }
     }
 }
 
 /**
- * Warm terracotta clay seal emblem containing an ivory Z monogram, echoing the app icon.
+ * Refined warm porcelain seal emblem mirroring Zai's desktop icon for the empty chat canvas.
  */
 @Composable
 fun ZaiEmblemMark(
-    size: Dp = 44.dp,
+    size: Dp = 48.dp,
     modifier: Modifier = Modifier,
 ) {
-    val sealColor = MaterialTheme.colorScheme.primary
-    val ivory = Color(0xFFFAF8F2)
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
+    val tileBg = if (isDark) Color(0xFF282622) else Color(0xFFFDF8EF)
+    val tileBorder = MaterialTheme.colorScheme.outlineVariant
+    val frontCard = if (isDark) Color(0xFFF3EEE6) else Color(0xFF282521)
+    val backCard = MaterialTheme.colorScheme.primary
+    val sparkFill = if (isDark) Color(0xFF282622) else Color(0xFFFAF6EE)
 
     Box(
         modifier = modifier
             .size(size)
-            .clip(RoundedCornerShape(size * 0.30f))
-            .background(sealColor),
+            .clip(RoundedCornerShape(size * 0.28f))
+            .background(tileBg)
+            .border(0.6.dp, tileBorder, RoundedCornerShape(size * 0.28f)),
         contentAlignment = Alignment.Center,
     ) {
-        ZaiMonogramMark(
-            size = size * 0.54f,
-            tint = ivory,
-            dotColor = ivory.copy(alpha = 0.85f),
-        )
+        Canvas(modifier = Modifier.size(size * 0.68f)) {
+            val w = this.size.width
+            val h = this.size.height
+            val cardW = w * 0.62f
+            val cardH = h * 0.62f
+            val radius = CornerRadius(w * 0.14f, w * 0.14f)
+
+            rotate(degrees = -13f, pivot = Offset(w * 0.42f, h * 0.56f)) {
+                drawRoundRect(
+                    color = backCard,
+                    topLeft = Offset(w * 0.12f, h * 0.25f),
+                    size = Size(cardW, cardH),
+                    cornerRadius = radius,
+                )
+            }
+            rotate(degrees = 11f, pivot = Offset(w * 0.58f, h * 0.47f)) {
+                drawRoundRect(
+                    color = frontCard,
+                    topLeft = Offset(w * 0.27f, h * 0.16f),
+                    size = Size(cardW, cardH),
+                    cornerRadius = radius,
+                )
+                val cx = w * 0.58f
+                val cy = h * 0.47f
+                val rOuter = w * 0.175f
+                val rCtrl = w * 0.032f
+                val spark = Path().apply {
+                    moveTo(cx, cy - rOuter)
+                    quadraticTo(cx + rCtrl, cy - rCtrl, cx + rOuter, cy)
+                    quadraticTo(cx + rCtrl, cy + rCtrl, cx, cy + rOuter)
+                    quadraticTo(cx - rCtrl, cy + rCtrl, cx - rOuter, cy)
+                    quadraticTo(cx - rCtrl, cy - rCtrl, cx, cy - rOuter)
+                    close()
+                }
+                drawPath(path = spark, color = sparkFill)
+            }
+        }
     }
 }
 

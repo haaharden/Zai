@@ -9,7 +9,8 @@ import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { AuthController } from "./auth.ts";
 import { bridge, settle } from "./bridge.ts";
 import { fetchEvents, nativeFetch } from "./native-fetch.ts";
-import { ProviderRegistry } from "./providers.ts";
+import { ProviderRegistry, PRIMARY_OAUTH_PROVIDER_ID } from "./providers.ts";
+import { QuotaTracker } from "./quota.ts";
 import { SessionManager } from "./sessions.ts";
 import { dispatch } from "./shims/http.ts";
 
@@ -55,14 +56,18 @@ const credentials = new MirroredCredentialStore();
 const models = createModels({ credentials });
 const providerRegistry = new ProviderRegistry(models, credentials);
 providerRegistry.registerBuiltins();
+const quotaTracker = new QuotaTracker(models, credentials);
 
 const emitStatus = async () => {
   const providers = await providerRegistry.buildVisibleStatus();
   bridge({ type: "status", providers });
 };
 
-const authController = new AuthController(models, emitStatus);
-const sessionManager = new SessionManager(models);
+const authController = new AuthController(models, async () => {
+  await emitStatus();
+  void quotaTracker.refresh(PRIMARY_OAUTH_PROVIDER_ID, true);
+});
+const sessionManager = new SessionManager(models, quotaTracker);
 
 const guard = (op: string, fn: () => Promise<void>, session?: string) => {
   fn().catch((e) =>
@@ -82,8 +87,18 @@ const arg = (json: string) => JSON.parse(json);
       }
       await providerRegistry.syncCustomProviders(a.customProviders ?? [], a.customKeys ?? {});
       await emitStatus();
+      void quotaTracker.refresh(PRIMARY_OAUTH_PROVIDER_ID, false);
     }),
   status: () => guard("status", emitStatus),
+  refreshQuota: (json: string) =>
+    guard("refreshQuota", async () => {
+      const a = arg(json);
+      await quotaTracker.refresh(a.provider ?? PRIMARY_OAUTH_PROVIDER_ID, !!a.force);
+    }),
+  compact: (json: string) => {
+    const a = arg(json);
+    guard("compact", () => sessionManager.compactNow(a.session), a.session);
+  },
   syncCustomProviders: (json: string) =>
     guard("syncCustomProviders", async () => {
       const a = arg(json);
@@ -101,7 +116,12 @@ const arg = (json: string) => JSON.parse(json);
     const a = arg(json);
     authController.answerPrompt(a.id, a.value, a.cancel);
   },
-  logout: (json: string) => guard("logout", () => authController.logout(arg(json).provider)),
+  logout: (json: string) =>
+    guard("logout", async () => {
+      const provider = arg(json).provider;
+      await authController.logout(provider);
+      quotaTracker.clear(provider);
+    }),
   configure: (json: string) => {
     const a = arg(json);
     guard("configure", () => sessionManager.configure(a), a.session);

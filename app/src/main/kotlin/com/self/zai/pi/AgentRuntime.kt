@@ -2,7 +2,9 @@ package com.self.zai.pi
 
 import com.self.zai.model.AuthUiState
 import com.self.zai.model.CustomProviderConfig
+import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
+import com.self.zai.model.SessionContextUsage
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
@@ -45,6 +47,15 @@ sealed interface PiSessionEvent {
 
     data class Steered(override val sessionId: String, val text: String) : PiSessionEvent
     data class Transcript(override val sessionId: String, val messagesJson: String) : PiSessionEvent
+    data class ContextUsage(override val sessionId: String, val usage: SessionContextUsage) : PiSessionEvent
+    data class ContextCompacted(
+        override val sessionId: String,
+        val blockId: String,
+        val foldedCount: Int,
+        val beforeTokens: Int,
+        val afterTokens: Int,
+        val percent: Int,
+    ) : PiSessionEvent
     data class Idle(override val sessionId: String) : PiSessionEvent
     data class Error(override val sessionId: String, val message: String) : PiSessionEvent
 
@@ -84,6 +95,7 @@ interface AgentRuntime {
     val piVersion: StateFlow<String>
     val hotUpdateTag: StateFlow<String?>
     val providers: StateFlow<List<ProviderStatus>>
+    val providerQuotas: StateFlow<Map<String, ProviderQuota>>
     val authState: StateFlow<AuthUiState>
     val events: SharedFlow<PiSessionEvent>
 
@@ -94,6 +106,7 @@ interface AgentRuntime {
     fun resetToBundledPi()
     suspend fun awaitReady()
     fun syncCustomProviders(customProviders: List<CustomProviderConfig>)
+    fun refreshProviderQuota(providerId: String = PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID, force: Boolean = false)
     fun startChatGptLogin(method: String = "browser")
     fun cancelLogin()
     fun submitAuthPrompt(promptId: String, value: String)
@@ -108,8 +121,11 @@ interface AgentRuntime {
         systemPrompt: String,
         toolSpecsJson: JSONArray,
         savedMessagesJson: String?,
+        compactionMode: String = "acp",
+        compactionThresholdPercent: Int = 75,
     )
     fun prompt(sessionId: String, text: String)
+    fun compactSession(sessionId: String)
     fun abort(sessionId: String)
     fun disposeSession(sessionId: String)
     fun lookupModels(ids: List<String>, onResult: (Map<String, Triple<Int, Boolean, Boolean>>) -> Unit)

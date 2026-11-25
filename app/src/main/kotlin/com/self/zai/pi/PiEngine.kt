@@ -16,6 +16,7 @@ import com.self.zai.BuildConfig
 import com.self.zai.data.CredentialVault
 import com.self.zai.model.AuthUiState
 import com.self.zai.model.CustomProviderConfig
+import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.update.AppUpdater
 import kotlinx.coroutines.CompletableDeferred
@@ -68,6 +69,9 @@ class PiEngine(
 
     private val _providers = MutableStateFlow<List<ProviderStatus>>(emptyList())
     override val providers: StateFlow<List<ProviderStatus>> = _providers.asStateFlow()
+
+    private val _providerQuotas = MutableStateFlow<Map<String, ProviderQuota>>(emptyMap())
+    override val providerQuotas: StateFlow<Map<String, ProviderQuota>> = _providerQuotas.asStateFlow()
 
     private val _authState = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
     override val authState: StateFlow<AuthUiState> = _authState.asStateFlow()
@@ -168,6 +172,14 @@ class PiEngine(
         callJs("syncCustomProviders", payload.toString())
     }
 
+    override fun refreshProviderQuota(providerId: String, force: Boolean) {
+        if (!_isReady.value) return
+        val payload = JSONObject()
+            .put("provider", providerId)
+            .put("force", force)
+        callJs("refreshQuota", payload.toString())
+    }
+
     override fun startChatGptLogin(method: String) {
         pendingLoginJob?.cancel()
         pendingLoginJob = null
@@ -242,6 +254,8 @@ class PiEngine(
         systemPrompt: String,
         toolSpecsJson: JSONArray,
         savedMessagesJson: String?,
+        compactionMode: String,
+        compactionThresholdPercent: Int,
     ) {
         val payload = JSONObject()
             .put("session", sessionId)
@@ -250,6 +264,12 @@ class PiEngine(
             .put("thinkingLevel", thinkingLevel)
             .put("systemPrompt", systemPrompt)
             .put("toolSpecs", toolSpecsJson)
+            .put(
+                "compaction",
+                JSONObject()
+                    .put("mode", compactionMode)
+                    .put("thresholdPercent", compactionThresholdPercent),
+            )
         if (!savedMessagesJson.isNullOrBlank()) {
             runCatching { JSONArray(savedMessagesJson) }.onSuccess {
                 payload.put("messages", it)
@@ -260,6 +280,11 @@ class PiEngine(
 
     override fun prompt(sessionId: String, text: String) {
         callJs("prompt", JSONObject().put("session", sessionId).put("text", text).toString())
+    }
+
+    override fun compactSession(sessionId: String) {
+        if (!_isReady.value) return
+        callJs("compact", JSONObject().put("session", sessionId).toString())
     }
 
     override fun abort(sessionId: String) {
@@ -401,6 +426,14 @@ class PiEngine(
 
             "status" -> {
                 _providers.value = PiBridgeCodec.parseProvidersStatus(msg.optJSONArray("providers"))
+            }
+
+            "quota" -> {
+                val providerId = msg.optString("provider", PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID)
+                val parsed = PiBridgeCodec.parseProviderQuota(providerId, msg.optJSONObject("quota"))
+                val next = _providerQuotas.value.toMutableMap()
+                if (parsed == null) next.remove(providerId) else next[providerId] = parsed
+                _providerQuotas.value = next
             }
 
             "auth_event" -> {

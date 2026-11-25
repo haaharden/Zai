@@ -91,7 +91,9 @@ import com.self.zai.model.ChatSession
 import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
 import com.self.zai.model.PendingConfirmation
+import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
+import com.self.zai.model.SessionContextUsage
 import com.self.zai.model.SkillEntry
 import com.self.zai.model.StepState
 import com.self.zai.model.ThinkingLevelDisplay
@@ -102,6 +104,7 @@ import com.self.zai.ui.components.ZaiInsetDivider
 import com.self.zai.ui.components.ZaiMarkdownText
 import com.self.zai.ui.components.ZaiModelPickerSheet
 import com.self.zai.ui.components.ZaiMonogramMark
+import com.self.zai.ui.components.ZaiPrimaryButton
 import com.self.zai.ui.components.ZaiThinkingPickerSheet
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -110,9 +113,11 @@ fun ChatScreen(
     session: ChatSession,
     allSessions: List<ChatSession>,
     providers: List<ProviderStatus>,
+    providerQuotas: Map<String, ProviderQuota>,
     enabledSkills: List<SkillEntry>,
     sessionModel: ModelOption?,
     sessionThinkingLevel: String,
+    contextUsage: SessionContextUsage?,
     piReady: Boolean,
     isRunning: Boolean,
     liveStepLabel: String,
@@ -125,6 +130,8 @@ fun ChatScreen(
     voiceListenState: VoiceListenState,
     onToggleVoiceInput: () -> Unit,
     onCancelVoiceInput: () -> Unit,
+    onRefreshQuota: (providerId: String, force: Boolean) -> Unit,
+    onCompactSession: () -> Unit,
     onSendMessage: (String) -> Unit,
     onStopRun: () -> Unit,
     onSelectSession: (String) -> Unit,
@@ -139,6 +146,7 @@ fun ChatScreen(
     var showSessionsSheet by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showThinkingPicker by remember { mutableStateOf(false) }
+    var showContextSheet by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -474,6 +482,37 @@ fun ChatScreen(
                     onClick = { showThinkingPicker = true },
                 )
             }
+
+            if (session.messages.isNotEmpty() && contextUsage != null) {
+                val nearLimit = contextUsage.percent >= (contextUsage.thresholdPercent - 10).coerceAtLeast(30)
+                val ctxLabel = if (contextUsage.archivedBlocks > 0) {
+                    "${contextUsage.percent}%·${contextUsage.archivedBlocks}块"
+                } else {
+                    "${contextUsage.percent}%"
+                }
+                Surface(
+                    onClick = { showContextSheet = true },
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (nearLimit) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    },
+                    border = BorderStroke(
+                        0.6.dp,
+                        if (nearLimit) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                        else MaterialTheme.colorScheme.outlineVariant,
+                    ),
+                ) {
+                    Text(
+                        text = ctxLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (nearLimit) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
+            }
         }
 
         // Sculpted floating composer dock
@@ -615,10 +654,123 @@ fun ChatScreen(
             title = "选择当前对话模型",
             providers = providers,
             selectedModel = sessionModel,
+            providerQuotas = providerQuotas,
+            onRefreshQuota = onRefreshQuota,
             onSelect = onSelectSessionModel,
             onManageProviders = onOpenModels,
             onDismiss = { showModelPicker = false },
         )
+    }
+
+    // Compact session context & manual compaction sheet
+    if (showContextSheet && contextUsage != null) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showContextSheet = false },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .navigationBarsPadding(),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "上下文状态",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = {
+                            showContextSheet = false
+                            onOpenSettings()
+                        },
+                    ) {
+                        Text("调整阈值", fontWeight = FontWeight.Medium)
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val estK = String.format("%.1fK", contextUsage.estimatedTokens / 1000.0)
+                    val winK = "${contextUsage.contextWindow / 1000}K"
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "约 $estK / $winK tokens",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = "${contextUsage.percent}%",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(5.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(fraction = (contextUsage.percent / 100f).coerceIn(0f, 1f))
+                                .height(5.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (contextUsage.percent >= contextUsage.thresholdPercent) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    },
+                                ),
+                        )
+                    }
+                    val modeLine = buildString {
+                        append("策略：${contextUsage.mode.label()}")
+                        if (contextUsage.mode != com.self.zai.model.CompactionMode.OFF) {
+                            append(" · 阈值 ${contextUsage.thresholdPercent}%")
+                        }
+                        if (contextUsage.archivedBlocks > 0) {
+                            append(" · 已归档 ${contextUsage.archivedBlocks} 块")
+                        }
+                    }
+                    Text(
+                        text = modeLine,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                ZaiPrimaryButton(
+                    text = if (isRunning) "回复生成中，请稍候" else "立即压缩早期对话",
+                    enabled = !isRunning && session.messages.size >= 4 && piReady,
+                    onClick = {
+                        showContextSheet = false
+                        onCompactSession()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(14.dp))
+            }
+        }
     }
 
     // Dynamic thinking-level picker sheet (strictly reflects provider-exposed levels)

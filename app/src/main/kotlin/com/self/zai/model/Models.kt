@@ -31,6 +31,26 @@ enum class TtsReadoutMode {
 }
 
 @Serializable
+enum class CompactionMode {
+    OFF,
+    AUTO,
+    ACP,
+    ;
+
+    fun toWire(): String = when (this) {
+        OFF -> "off"
+        AUTO -> "auto"
+        ACP -> "acp"
+    }
+
+    fun label(): String = when (this) {
+        OFF -> "关闭"
+        AUTO -> "自动"
+        ACP -> "ACP"
+    }
+}
+
+@Serializable
 data class CustomModelEntry(
     val id: String,
     val contextWindow: Int = 128_000,
@@ -96,6 +116,8 @@ data class AppSettings(
     val assistantAutoListen: Boolean = true,
     val assistantAttachScreenDefault: Boolean = false,
     val assistantTtsMode: TtsReadoutMode = TtsReadoutMode.HEADSET_ONLY,
+    val compactionMode: CompactionMode = CompactionMode.ACP,
+    val compactionThresholdPercent: Int = 75,
 )
 
 data class ModelOption(
@@ -217,4 +239,67 @@ data class PendingConfirmation(
     val callId: String,
     val title: String,
     val detail: String,
+)
+
+data class QuotaWindow(
+    val usedPercent: Int,
+    val remainingPercent: Int,
+    val windowMinutes: Int,
+    val resetAtMs: Long,
+) {
+    fun windowLabel(): String = when {
+        windowMinutes <= 0 -> "周期"
+        windowMinutes < 60 -> "${windowMinutes}m"
+        windowMinutes % (24 * 60) == 0 -> {
+            val days = windowMinutes / (24 * 60)
+            if (days == 7) "周" else "${days}天"
+        }
+        windowMinutes % 60 == 0 -> "${windowMinutes / 60}h"
+        else -> "${windowMinutes}m"
+    }
+
+    fun formatResetCountdown(nowMs: Long = System.currentTimeMillis()): String {
+        if (resetAtMs <= nowMs) return ""
+        val mins = ((resetAtMs - nowMs) / 60_000L).coerceAtLeast(1L)
+        val days = mins / (24 * 60)
+        val hours = (mins % (24 * 60)) / 60
+        val remMins = mins % 60
+        return when {
+            days >= 1 -> "${days}天${if (hours > 0) "${hours}h" else ""}后重置"
+            hours >= 1 -> "${hours}h${if (remMins > 0) "${remMins}m" else ""}后重置"
+            else -> "${remMins}分钟后重置"
+        }
+    }
+}
+
+data class ProviderQuota(
+    val providerId: String,
+    val planType: String? = null,
+    val email: String? = null,
+    val primary: QuotaWindow? = null,
+    val secondary: QuotaWindow? = null,
+    val limitReached: Boolean = false,
+    val creditsUnlimited: Boolean? = null,
+    val creditsBalance: String? = null,
+    val updatedAtMs: Long = System.currentTimeMillis(),
+    val error: String? = null,
+) {
+    fun planDisplayLabel(): String? = when (planType?.lowercase()) {
+        "plus" -> "Plus"
+        "pro" -> "Pro"
+        "team" -> "Team"
+        "enterprise" -> "Enterprise"
+        "free" -> "Free"
+        null, "" -> null
+        else -> planType.replaceFirstChar { it.uppercase() }
+    }
+}
+
+data class SessionContextUsage(
+    val estimatedTokens: Int,
+    val contextWindow: Int,
+    val percent: Int,
+    val archivedBlocks: Int = 0,
+    val mode: CompactionMode = CompactionMode.ACP,
+    val thresholdPercent: Int = 75,
 )

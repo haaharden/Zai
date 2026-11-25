@@ -1,9 +1,13 @@
 package com.self.zai.pi
 
 import com.self.zai.model.AuthUiState
+import com.self.zai.model.CompactionMode
 import com.self.zai.model.CustomProviderConfig
 import com.self.zai.model.ModelOption
+import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
+import com.self.zai.model.QuotaWindow
+import com.self.zai.model.SessionContextUsage
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -124,6 +128,32 @@ object PiBridgeCodec {
         "transcript" -> msg.optJSONArray("messages")?.let { arr ->
             PiSessionEvent.Transcript(msg.optString("session"), arr.toString())
         }
+        "context_usage" -> {
+            val mode = when (msg.optString("mode").lowercase()) {
+                "off" -> CompactionMode.OFF
+                "auto" -> CompactionMode.AUTO
+                else -> CompactionMode.ACP
+            }
+            PiSessionEvent.ContextUsage(
+                sessionId = msg.optString("session"),
+                usage = SessionContextUsage(
+                    estimatedTokens = msg.optInt("estimatedTokens", 0),
+                    contextWindow = msg.optInt("contextWindow", 128_000).coerceAtLeast(1),
+                    percent = msg.optInt("percent", 0).coerceIn(0, 100),
+                    archivedBlocks = msg.optInt("archivedBlocks", 0),
+                    mode = mode,
+                    thresholdPercent = msg.optInt("thresholdPercent", 75),
+                ),
+            )
+        }
+        "context_compacted" -> PiSessionEvent.ContextCompacted(
+            sessionId = msg.optString("session"),
+            blockId = msg.optString("blockId"),
+            foldedCount = msg.optInt("foldedCount", 0),
+            beforeTokens = msg.optInt("beforeTokens", 0),
+            afterTokens = msg.optInt("afterTokens", 0),
+            percent = msg.optInt("percent", 0).coerceIn(0, 100),
+        )
         "idle" -> PiSessionEvent.Idle(msg.optString("session"))
         "error" -> {
             val sessionId = msg.optString("session")
@@ -184,4 +214,36 @@ object PiBridgeCodec {
                 }
             }
         }.getOrDefault(emptyMap())
+
+    fun parseProviderQuota(providerId: String, obj: JSONObject?): ProviderQuota? {
+        if (obj == null) return null
+        fun parseWindow(w: JSONObject?): QuotaWindow? {
+            if (w == null) return null
+            if (!w.has("usedPercent") && !w.has("remainingPercent")) return null
+            val used = w.optInt("usedPercent", 100 - w.optInt("remainingPercent", 100)).coerceIn(0, 100)
+            val remaining = w.optInt("remainingPercent", 100 - used).coerceIn(0, 100)
+            return QuotaWindow(
+                usedPercent = used,
+                remainingPercent = remaining,
+                windowMinutes = w.optInt("windowMinutes", 0),
+                resetAtMs = w.optLong("resetAtMs", 0L),
+            )
+        }
+        return ProviderQuota(
+            providerId = providerId.ifBlank { obj.optString("providerId", PRIMARY_OAUTH_PROVIDER_ID) },
+            planType = obj.optString("planType").takeIf { it.isNotBlank() && it != "null" },
+            email = obj.optString("email").takeIf { it.isNotBlank() && it != "null" },
+            primary = parseWindow(obj.optJSONObject("primary")),
+            secondary = parseWindow(obj.optJSONObject("secondary")),
+            limitReached = obj.optBoolean("limitReached", false),
+            creditsUnlimited = if (obj.has("creditsUnlimited") && !obj.isNull("creditsUnlimited")) {
+                obj.optBoolean("creditsUnlimited")
+            } else {
+                null
+            },
+            creditsBalance = obj.optString("creditsBalance").takeIf { it.isNotBlank() && it != "null" },
+            updatedAtMs = obj.optLong("updatedAtMs", System.currentTimeMillis()),
+            error = obj.optString("error").takeIf { it.isNotBlank() && it != "null" },
+        )
+    }
 }

@@ -58,8 +58,10 @@ import com.self.zai.model.AuthUiState
 import com.self.zai.model.CustomModelEntry
 import com.self.zai.model.CustomProviderConfig
 import com.self.zai.model.ModelOption
+import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.pi.PiBridgeCodec
+import com.self.zai.ui.components.ProviderQuotaStrip
 import com.self.zai.ui.components.ZaiInsetDivider
 import com.self.zai.ui.components.ZaiPaperGroup
 import com.self.zai.ui.components.ZaiPrimaryButton
@@ -85,8 +87,10 @@ private val PRESET_PROVIDERS = listOf(
 fun ModelsAndAuthScreen(
     settings: AppSettings,
     providers: List<ProviderStatus>,
+    providerQuotas: Map<String, ProviderQuota>,
     activeModel: ModelOption?,
     authState: AuthUiState,
+    onRefreshQuota: (providerId: String, force: Boolean) -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onStartChatGptLogin: (method: String) -> Unit,
     onCancelLogin: () -> Unit,
@@ -127,6 +131,13 @@ fun ModelsAndAuthScreen(
     }
 
     val chatGptProvider = providers.firstOrNull { it.id == PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID }
+    val codexSignedIn = chatGptProvider?.credentialType == "oauth"
+
+    LaunchedEffect(codexSignedIn) {
+        if (codexSignedIn) {
+            onRefreshQuota(PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID, false)
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -301,6 +312,10 @@ fun ModelsAndAuthScreen(
 
                         AuthUiState.Idle -> {
                             if (signedIn) {
+                                ProviderQuotaStrip(
+                                    quota = providerQuotas[PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID],
+                                    onRefresh = { onRefreshQuota(PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID, true) },
+                                )
                                 val gptModels = chatGptProvider.models
                                 if (gptModels.isNotEmpty()) {
                                     ZaiInsetDivider()

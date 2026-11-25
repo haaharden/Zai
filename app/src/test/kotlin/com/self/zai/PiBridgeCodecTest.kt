@@ -1,6 +1,7 @@
 package com.self.zai
 
 import com.self.zai.model.AuthUiState
+import com.self.zai.model.CompactionMode
 import com.self.zai.model.CustomModelEntry
 import com.self.zai.model.CustomProviderConfig
 import com.self.zai.pi.PiBridgeCodec
@@ -114,5 +115,80 @@ class PiBridgeCodecTest {
             JSONObject("""{"type":"error","op":"login","message":"bad"}"""),
         )
         assertFalse(noSessionErr != null)
+    }
+
+    @Test
+    fun parseProviderQuota_andContextEvents_decodeWindowsAndCountdownCleanly() {
+        val now = 1_800_000_000_000L
+        val quotaJson = JSONObject(
+            """
+            {
+              "providerId": "openai-codex",
+              "planType": "pro",
+              "primary": {
+                "usedPercent": 16,
+                "remainingPercent": 84,
+                "windowMinutes": 300,
+                "resetAtMs": ${now + 135 * 60_000L}
+              },
+              "secondary": {
+                "usedPercent": 38,
+                "remainingPercent": 62,
+                "windowMinutes": 10080,
+                "resetAtMs": ${now + 3 * 24 * 3600_000L}
+              },
+              "limitReached": false,
+              "updatedAtMs": $now
+            }
+            """.trimIndent(),
+        )
+        val parsed = PiBridgeCodec.parseProviderQuota("openai-codex", quotaJson)
+        assertNotNull(parsed)
+        assertEquals("Pro", parsed!!.planDisplayLabel())
+        assertEquals(84, parsed.primary!!.remainingPercent)
+        assertEquals("5h", parsed.primary!!.windowLabel())
+        assertEquals("2h15m后重置", parsed.primary!!.formatResetCountdown(now))
+        assertEquals(62, parsed.secondary!!.remainingPercent)
+        assertEquals("周", parsed.secondary!!.windowLabel())
+        assertEquals("3天后重置", parsed.secondary!!.formatResetCountdown(now))
+
+        val usageEv = PiBridgeCodec.parseSessionEvent(
+            JSONObject(
+                """
+                {
+                  "type": "context_usage",
+                  "session": "s1",
+                  "estimatedTokens": 92000,
+                  "contextWindow": 500000,
+                  "percent": 18,
+                  "archivedBlocks": 2,
+                  "mode": "acp",
+                  "thresholdPercent": 75
+                }
+                """.trimIndent(),
+            ),
+        ) as PiSessionEvent.ContextUsage
+        assertEquals(18, usageEv.usage.percent)
+        assertEquals(2, usageEv.usage.archivedBlocks)
+        assertEquals(CompactionMode.ACP, usageEv.usage.mode)
+
+        val compactEv = PiBridgeCodec.parseSessionEvent(
+            JSONObject(
+                """
+                {
+                  "type": "context_compacted",
+                  "session": "s1",
+                  "blockId": "b1",
+                  "foldedCount": 8,
+                  "beforeTokens": 120000,
+                  "afterTokens": 30000,
+                  "percent": 24
+                }
+                """.trimIndent(),
+            ),
+        ) as PiSessionEvent.ContextCompacted
+        assertEquals("b1", compactEv.blockId)
+        assertEquals(8, compactEv.foldedCount)
+        assertEquals(24, compactEv.percent)
     }
 }

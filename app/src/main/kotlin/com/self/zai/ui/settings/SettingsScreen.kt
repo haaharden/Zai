@@ -62,9 +62,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.self.zai.BuildConfig
 import com.self.zai.model.AppSettings
+import com.self.zai.model.CompactionMode
 import com.self.zai.model.ControlChannelMode
 import com.self.zai.model.ModelOption
 import com.self.zai.model.PerceptionMode
+import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.model.ThemeMode
 import com.self.zai.model.ThinkingLevelDisplay
@@ -92,6 +94,7 @@ import kotlin.math.roundToInt
 fun SettingsScreen(
     settings: AppSettings,
     providers: List<ProviderStatus>,
+    providerQuotas: Map<String, ProviderQuota>,
     defaultModel: ModelOption?,
     defaultThinkingLevel: String,
     piVersion: String,
@@ -101,6 +104,8 @@ fun SettingsScreen(
     accessibilityConnected: Boolean,
     onReleaseChecked: (ReleaseUpdateInfo?) -> Unit,
     onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
+    onUpdateCompaction: (CompactionMode, Int) -> Unit,
+    onRefreshQuota: (providerId: String, force: Boolean) -> Unit,
     onSelectDefaultModel: (providerId: String, modelId: String) -> Unit,
     onSelectDefaultThinking: (String) -> Unit,
     onUpdateUserPrompt: (String) -> Unit,
@@ -130,6 +135,7 @@ fun SettingsScreen(
 
     var showDefaultModelSheet by remember { mutableStateOf(false) }
     var showUserPromptSheet by remember { mutableStateOf(false) }
+    var showCompactionConfig by remember { mutableStateOf(false) }
     var showAdvancedControl by remember { mutableStateOf(false) }
     var showSystemPerms by remember { mutableStateOf(false) }
     var showRepoEditor by remember { mutableStateOf(false) }
@@ -230,6 +236,93 @@ fun SettingsScreen(
                                     onClick = { onSelectDefaultThinking(level) },
                                 )
                             }
+                        }
+                    }
+                }
+
+                ZaiInsetDivider()
+
+                val compactionSummary = if (settings.compactionMode == CompactionMode.OFF) {
+                    "关闭"
+                } else {
+                    "${settings.compactionMode.label()} · ${settings.compactionThresholdPercent}%"
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showCompactionConfig = !showCompactionConfig }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "上下文压缩",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = compactionSummary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        if (showCompactionConfig) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+
+                AnimatedVisibility(visible = showCompactionConfig) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        ZaiSegmentedControl(
+                            options = listOf(
+                                CompactionMode.OFF to "关闭",
+                                CompactionMode.AUTO to "自动",
+                                CompactionMode.ACP to "ACP 主动",
+                            ),
+                            selected = settings.compactionMode,
+                            onSelect = { mode ->
+                                onUpdateCompaction(mode, settings.compactionThresholdPercent)
+                            },
+                        )
+
+                        if (settings.compactionMode != CompactionMode.OFF) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "触发阈值（占模型上下文比例）",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    listOf(50, 65, 75, 85).forEach { pct ->
+                                        ZaiSelectPill(
+                                            label = "$pct%",
+                                            selected = settings.compactionThresholdPercent == pct,
+                                            monospace = true,
+                                            onClick = { onUpdateCompaction(settings.compactionMode, pct) },
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = if (settings.compactionMode == CompactionMode.ACP) {
+                                    "超阈值自动折叠旧历史；模型也可按需压缩、检索与解压历史块。"
+                                } else {
+                                    "超过阈值时自动摘要折叠早期对话，保留近期消息与当前上下文。"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
@@ -774,6 +867,8 @@ fun SettingsScreen(
             title = "选择默认模型",
             providers = providers,
             selectedModel = defaultModel,
+            providerQuotas = providerQuotas,
+            onRefreshQuota = onRefreshQuota,
             onSelect = onSelectDefaultModel,
             onManageProviders = onOpenModels,
             onDismiss = { showDefaultModelSheet = false },

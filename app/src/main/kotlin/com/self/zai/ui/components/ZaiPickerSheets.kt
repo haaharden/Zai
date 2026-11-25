@@ -1,6 +1,7 @@
 package com.self.zai.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,8 +40,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.self.zai.model.ModelOption
+import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
+import com.self.zai.model.QuotaWindow
 import com.self.zai.model.ThinkingLevelDisplay
+import com.self.zai.pi.PiBridgeCodec
 
 /**
  * Shared clean bottom sheet for picking a connected model (used both above the chat composer
@@ -50,12 +56,20 @@ fun ZaiModelPickerSheet(
     title: String,
     providers: List<ProviderStatus>,
     selectedModel: ModelOption?,
+    providerQuotas: Map<String, ProviderQuota> = emptyMap(),
+    onRefreshQuota: ((providerId: String, force: Boolean) -> Unit)? = null,
     onSelect: (providerId: String, modelId: String) -> Unit,
     onManageProviders: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val connected = providers.filter { it.isConnected && it.models.isNotEmpty() }
+
+    LaunchedEffect(connected.size) {
+        if (connected.any { it.id == PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID }) {
+            onRefreshQuota?.invoke(PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID, false)
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -85,7 +99,7 @@ fun ZaiModelPickerSheet(
                             onManageProviders()
                         },
                     ) {
-                        Text("管理账号与渠道", fontWeight = FontWeight.Medium)
+                        Text("管理账号", fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -120,18 +134,51 @@ fun ZaiModelPickerSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 460.dp)
+                        .heightIn(max = 480.dp)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     connected.forEach { provider ->
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(
-                                text = provider.name,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            )
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = provider.name,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                val plan = providerQuotas[provider.id]?.planDisplayLabel()
+                                if (!plan.isNullOrBlank()) {
+                                    Text(
+                                        text = plan,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f))
+                                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+
+                            // Show live remaining quota card for ChatGPT Codex OAuth
+                            if (provider.id == PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID &&
+                                provider.credentialType == "oauth"
+                            ) {
+                                ProviderQuotaStrip(
+                                    quota = providerQuotas[provider.id],
+                                    onRefresh = {
+                                        onRefreshQuota?.invoke(provider.id, true)
+                                    },
+                                )
+                            }
+
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -199,6 +246,153 @@ fun ZaiModelPickerSheet(
                 }
             }
             Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+/**
+ * Quiet Anthropic-styled account remaining quota strip showing 5h / weekly rolling windows
+ * and reset countdowns with one-tap refresh.
+ */
+@Composable
+fun ProviderQuotaStrip(
+    quota: ProviderQuota?,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+            .padding(horizontal = 13.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val headerLabel = when {
+                quota == null -> "正在查询账号剩余额度…"
+                quota.limitReached -> "当前周期额度已用尽"
+                quota.primary != null || quota.secondary != null -> "账号剩余额度"
+                !quota.error.isNullOrBlank() -> quota.error
+                else -> "账号额度"
+            }
+            Text(
+                text = headerLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (quota?.limitReached == true) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.weight(1f),
+            )
+            if (!quota?.creditsBalance.isNullOrBlank()) {
+                Text(
+                    text = "余额 ${quota?.creditsBalance}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 6.dp),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onRefresh),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Refresh,
+                    contentDescription = "刷新额度",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+
+        if (quota != null) {
+            val windows = listOfNotNull(quota.primary, quota.secondary)
+            if (windows.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    windows.forEach { win ->
+                        QuotaWindowCell(
+                            window = win,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+            if (!quota.error.isNullOrBlank() && windows.isNotEmpty()) {
+                Text(
+                    text = quota.error,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuotaWindowCell(
+    window: QuotaWindow,
+    modifier: Modifier = Modifier,
+) {
+    val barColor = when {
+        window.remainingPercent <= 15 -> MaterialTheme.colorScheme.error
+        window.remainingPercent <= 35 -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.secondary
+    }
+    val resetHint = window.formatResetCountdown()
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "${window.windowLabel()} 剩 ${window.remainingPercent}%",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction = (window.remainingPercent / 100f).coerceIn(0f, 1f))
+                    .height(4.dp)
+                    .clip(CircleShape)
+                    .background(barColor),
+            )
+        }
+        if (resetHint.isNotEmpty()) {
+            Text(
+                text = resetHint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
