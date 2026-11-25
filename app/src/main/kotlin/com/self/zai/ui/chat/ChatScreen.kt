@@ -1,6 +1,8 @@
 package com.self.zai.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -10,6 +12,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,12 +34,15 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.ExpandLess
@@ -56,10 +63,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -72,6 +83,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import com.self.zai.model.ChatMessage
 import com.self.zai.model.ChatSession
 import com.self.zai.model.MessageRole
@@ -120,6 +132,7 @@ fun ChatScreen(
     var showModelPicker by remember { mutableStateOf(false) }
     var showThinkingPicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     val hasControlChannel = accessibilityConnected || shizukuStatus.isReady
     val channelLabel = when {
@@ -129,15 +142,86 @@ fun ChatScreen(
         else -> "尚未开启无障碍"
     }
 
+    // Smart bottom-pinning: respects manual scroll-up so reading history is never interrupted
+    var autoFollowBottom by remember(session.id) { mutableStateOf(true) }
+    val canScrollDown by remember { derivedStateOf { listState.canScrollForward } }
+    val bottomAnchorIndex = session.messages.size
+
+    // Only real user finger drags toggle autoFollowBottom (never programmatic IME/streaming scrolls)
+    LaunchedEffect(listState, session.id) {
+        var userScrolling = false
+        launch {
+            listState.interactionSource.interactions.collect { interaction ->
+                if (interaction is DragInteraction.Start) {
+                    userScrolling = true
+                }
+            }
+        }
+        snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
+            .collect { (inProgress, forward) ->
+                if (userScrolling) {
+                    if (forward) autoFollowBottom = false
+                    if (!inProgress) {
+                        userScrolling = false
+                        autoFollowBottom = !forward
+                    }
+                } else if (!forward && !inProgress) {
+                    autoFollowBottom = true
+                }
+            }
+    }
+
+    // Jump to bottom cleanly when switching sessions
+    LaunchedEffect(session.id) {
+        if (session.messages.isNotEmpty()) {
+            listState.scrollToItem(bottomAnchorIndex)
+        }
+    }
+
+    // Follow streaming output ONLY while pinned to bottom (never yank user away from earlier messages)
+    val lastMsg = session.messages.lastOrNull()
     LaunchedEffect(
         session.id,
         session.messages.size,
-        session.messages.lastOrNull()?.steps?.size,
-        session.messages.lastOrNull()?.text?.length,
+        lastMsg?.steps?.size,
+        lastMsg?.text?.length,
+        lastMsg?.thinking?.length,
     ) {
-        if (session.messages.isNotEmpty()) {
-            listState.animateScrollToItem(session.messages.lastIndex)
+        if (autoFollowBottom && session.messages.isNotEmpty()) {
+            listState.scrollToItem(bottomAnchorIndex)
         }
+    }
+
+    // Post-layout 1:1 viewport tracking for keyboard (IME) animations, multi-line composer growth, etc.:
+    // Runs strictly AFTER LazyColumn re-measures its new height so neither frame-by-frame nor instant IME
+    // transitions ever clamp to a stale height.
+    val latestMessageCount by rememberUpdatedState(session.messages.size)
+    LaunchedEffect(listState, session.id) {
+        var prevViewportHeight = 0
+        snapshotFlow { listState.layoutInfo.viewportSize.height }
+            .collect { currentHeight ->
+                if (prevViewportHeight > 0 && currentHeight > 0 && currentHeight != prevViewportHeight) {
+                    val shrinkDelta = prevViewportHeight - currentHeight
+                    if (latestMessageCount > 0) {
+                        if (shrinkDelta > 0) {
+                            if (autoFollowBottom) {
+                                listState.scrollBy(shrinkDelta.toFloat())
+                                if (listState.canScrollForward) {
+                                    listState.scrollToItem(latestMessageCount)
+                                }
+                            } else {
+                                listState.scrollBy(shrinkDelta.toFloat())
+                            }
+                        } else if (!autoFollowBottom) {
+                            // Keyboard closing while user was reading history: restore anchored position
+                            listState.scrollBy(shrinkDelta.toFloat())
+                        }
+                    }
+                }
+                if (currentHeight > 0) {
+                    prevViewportHeight = currentHeight
+                }
+            }
     }
 
     Column(
@@ -241,6 +325,7 @@ fun ChatScreen(
                     statusLine = if (!piReady) "正在启动 Pi 内核" else channelLabel,
                     onPickPrompt = { starter ->
                         inputText = ""
+                        autoFollowBottom = true
                         onSendMessage(starter)
                     },
                 )
@@ -252,11 +337,13 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(22.dp),
                 ) {
                     items(session.messages, key = { it.id }) { msg ->
+                        val isLatestAssistant = isRunning && msg.id == session.messages.lastOrNull()?.id
                         when (msg.role) {
                             MessageRole.USER -> UserBubble(msg.text)
                             MessageRole.ASSISTANT -> AssistantTurn(
                                 message = msg,
-                                isActiveTurn = isRunning && msg.id == session.messages.lastOrNull()?.id,
+                                isActiveTurn = isLatestAssistant,
+                                liveStepLabel = if (isLatestAssistant) liveStepLabel else "",
                             )
                             MessageRole.SYSTEM_NOTE -> Text(
                                 text = msg.text,
@@ -265,28 +352,47 @@ fun ChatScreen(
                             )
                         }
                     }
-                    item { Spacer(Modifier.height(10.dp)) }
+                    item(key = "bottom_anchor") { Spacer(Modifier.height(10.dp)) }
                 }
-            }
-        }
 
-        // Quiet single-status indicator above composer only while running
-        AnimatedVisibility(visible = isRunning && liveStepLabel.isNotBlank()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 22.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PulsingDot(color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = liveStepLabel,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                // Subtle floating jump-to-bottom button when user has scrolled up reading history
+                val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = canScrollDown && !autoFollowBottom,
+                    enter = fadeIn(tween(160)),
+                    exit = fadeOut(tween(160)),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 18.dp, bottom = 10.dp),
+                ) {
+                    Surface(
+                        onClick = {
+                            autoFollowBottom = true
+                            scope.launch {
+                                listState.animateScrollToItem(bottomAnchorIndex)
+                            }
+                        },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(
+                            0.75.dp,
+                            if (isRunning) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                            else MaterialTheme.colorScheme.outlineVariant,
+                        ),
+                        shadowElevation = if (isDark) 0.dp else 3.dp,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Rounded.ArrowDownward,
+                                contentDescription = "回到底部",
+                                tint = if (isRunning) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -444,7 +550,11 @@ fun ChatScreen(
                             if (canSend) {
                                 val toSend = inputText
                                 inputText = ""
+                                autoFollowBottom = true
                                 onSendMessage(toSend)
+                                scope.launch {
+                                    listState.animateScrollToItem(bottomAnchorIndex)
+                                }
                             }
                         },
                         shape = CircleShape,
@@ -795,7 +905,8 @@ private fun EditorialEmptyCanvas(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.Center,
     ) {
         ZaiEmblemMark(size = 50.dp)
@@ -892,6 +1003,7 @@ private fun UserBubble(text: String) {
 private fun AssistantTurn(
     message: ChatMessage,
     isActiveTurn: Boolean,
+    liveStepLabel: String,
 ) {
     var thinkingExpanded by remember(message.id) { mutableStateOf(false) }
 
@@ -937,9 +1049,9 @@ private fun AssistantTurn(
         }
 
         // Minimal phone-operation indicator: never lists per-step details
+        val hasRunningPhoneStep = message.steps.any { it.state == StepState.RUNNING }
         if (message.steps.isNotEmpty()) {
-            val operatingNow = message.steps.any { it.state == StepState.RUNNING } ||
-                (isActiveTurn && message.text.isBlank())
+            val operatingNow = hasRunningPhoneStep || (isActiveTurn && message.text.isBlank())
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(14.dp))
@@ -982,12 +1094,23 @@ private fun AssistantTurn(
                 style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 25.sp),
                 color = if (message.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground,
             )
+            if (isActiveTurn && !hasRunningPhoneStep && liveStepLabel.isNotBlank() && liveStepLabel != "思考中…" && liveStepLabel != "正在操作手机") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PulsingDot(color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = liveStepLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         } else if (isActiveTurn && message.steps.isEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PulsingDot(color = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "思考中…",
+                    text = liveStepLabel.ifBlank { "思考中…" },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
