@@ -1,7 +1,6 @@
 package com.self.zai.agent
 
 import com.self.zai.model.AppSettings
-import com.self.zai.model.CompactionMode
 import com.self.zai.phone.PhoneToolCatalog
 
 /**
@@ -42,11 +41,6 @@ object SystemPromptBuilder {
             val serverList = enabledMcpServers.joinToString("、") { "${it.name}(${it.tools.size}个工具)" }
             append("\n\n## 已接入 MCP 外部工具\n")
             append("以下远程 MCP 工具已注册并可直接调用：$serverList。外部 MCP 工具无需切离当前应用，可与手机操控工具组合完成复杂任务。")
-        }
-
-        if (settings.compactionMode == CompactionMode.ACP) {
-            append("\n\n## 长上下文主动压缩 (ACP)\n")
-            append("你拥有 `context_compress`、`context_search` 和 `context_expand` 三个本地上下文管理工具。当长对话完成一个阶段且早期细节不再需要常驻时，可主动调用 `context_compress` 折叠旧历史；需要回顾已压缩内容时，用 `context_search` 检索或 `context_expand` 还原。")
         }
     }
 

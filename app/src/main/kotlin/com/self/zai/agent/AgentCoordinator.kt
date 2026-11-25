@@ -642,9 +642,11 @@ class AgentCoordinator(
                         } else {
                             _liveStepLabel.value = when {
                                 event.tool == AgentToolDispatcher.READ_SKILL_TOOL -> "正在读取技能…"
-                                event.tool == "context_compress" -> "正在折叠早期上下文…"
-                                event.tool == "context_search" -> "正在检索已压缩历史…"
-                                event.tool == "context_expand" -> "正在展开历史上下文…"
+                                event.tool == "compress" || event.tool == "context_compress" -> "正在压缩上下文…"
+                                event.tool == "decompress" || event.tool == "context_expand" -> "正在解压历史块…"
+                                event.tool == "search_context" || event.tool == "context_search" -> "正在检索压缩历史…"
+                                event.tool == "acp_retrieve" -> "正在读取归档原文…"
+                                event.tool == "acp_status" -> "正在检查上下文状态…"
                                 event.tool.startsWith(AgentToolDispatcher.MCP_PREFIX) -> "正在调用 MCP 工具…"
                                 else -> "正在${toolDispatcher.humanLabel(event.tool, event.args)}…"
                             }

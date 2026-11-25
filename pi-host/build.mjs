@@ -43,6 +43,10 @@ await build({
   alias: {
     "node:http": "./src/shims/http.ts",
     "node:crypto": "./src/shims/crypto.ts",
+    crypto: "./src/shims/crypto.ts",
+    path: "./src/shims/node-stub.ts",
+    fs: "./src/shims/node-stub.ts",
+    module: "./src/shims/node-stub.ts",
     standardwebhooks: "./src/shims/standardwebhooks.ts",
   },
   define: {

@@ -145,12 +145,14 @@ class PiBridgeCodecTest {
         val parsed = PiBridgeCodec.parseProviderQuota("openai-codex", quotaJson)
         assertNotNull(parsed)
         assertEquals("Pro", parsed!!.planDisplayLabel())
-        assertEquals(84, parsed.primary!!.remainingPercent)
-        assertEquals("5h", parsed.primary!!.windowLabel())
-        assertEquals("2h15m后重置", parsed.primary!!.formatResetCountdown(now))
-        assertEquals(62, parsed.secondary!!.remainingPercent)
-        assertEquals("周", parsed.secondary!!.windowLabel())
-        assertEquals("3天后重置", parsed.secondary!!.formatResetCountdown(now))
+        val pWin = parsed.primary!!
+        assertEquals(84, pWin.remainingPercent)
+        assertEquals("5h", pWin.windowLabel())
+        assertEquals("2h15m后重置", pWin.formatResetCountdown(now))
+        val sWin = parsed.secondary!!
+        assertEquals(62, sWin.remainingPercent)
+        assertEquals("周", sWin.windowLabel())
+        assertEquals("3天后重置", sWin.formatResetCountdown(now))
 
         val usageEv = PiBridgeCodec.parseSessionEvent(
             JSONObject(

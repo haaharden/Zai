@@ -41,3 +41,24 @@ Signal.any ??= (signals: Iterable<AbortSignal>) => {
     return false;
   }
 };
+
+// Minimal Buffer.from shim for WebView (used by acp-kernel image-dimension scanning).
+if (typeof (globalThis as any).Buffer === "undefined") {
+  (globalThis as any).Buffer = {
+    from(input: string | Uint8Array | ArrayBuffer, encoding?: string): Uint8Array {
+      if (input instanceof Uint8Array) return input;
+      if (input instanceof ArrayBuffer) return new Uint8Array(input);
+      const str = String(input);
+      if (encoding === "base64" || encoding === "base64url") {
+        const bin = globalThis.atob(str);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return bytes;
+      }
+      return new TextEncoder().encode(str);
+    },
+    isBuffer(v: unknown): boolean {
+      return v instanceof Uint8Array;
+    },
+  };
+}

@@ -292,7 +292,7 @@ fun ProviderQuotaStrip(
             )
             if (!quota?.creditsBalance.isNullOrBlank()) {
                 Text(
-                    text = "余额 ${quota?.creditsBalance}",
+                    text = "余额 ${quota.creditsBalance}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(end = 6.dp),

@@ -316,7 +316,7 @@ fun SettingsScreen(
                             }
                             Text(
                                 text = if (settings.compactionMode == CompactionMode.ACP) {
-                                    "超阈值自动折叠旧历史；模型也可按需压缩、检索与解压历史块。"
+                                    "内置原版 acp-kernel（billion-context 同源 3 层 LSM 内核）：支持 m 标号精准选区压缩、搜索、解压与大结果外置。"
                                 } else {
                                     "超过阈值时自动摘要折叠早期对话，保留近期消息与当前上下文。"
                                 },

@@ -97,9 +97,7 @@ class CapabilitiesArchitectureTest {
             SystemPromptBuilder.configFingerprint(base, true),
             SystemPromptBuilder.configFingerprint(enriched, true),
         )
-        assertTrue(prompt0.contains("context_compress"))
         val offCompaction = base.copy(compactionMode = com.self.zai.model.CompactionMode.OFF)
-        assertFalse(SystemPromptBuilder.build(offCompaction, supportsImages = true).contains("context_compress"))
         assertNotEquals(
             SystemPromptBuilder.configFingerprint(base, true),
             SystemPromptBuilder.configFingerprint(offCompaction, true),

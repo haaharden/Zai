@@ -7,8 +7,9 @@ import {
 import { clampThinkingLevel, type Models } from "@earendil-works/pi-ai";
 import { bridge, bridgeCall } from "./bridge.ts";
 import {
+  ACP_KERNEL_TOOL_NAMES,
   ARCHIVE_META_ROLE,
-  extractSavedArchiveBlocks,
+  extractSavedCompactionState,
   normalizeCompactionConfig,
   SessionCompactor,
   type CompactionConfig,
@@ -58,10 +59,10 @@ export class SessionManager {
 
     const thinkingLevel = clampThinkingLevel(model, (cfg.thinkingLevel ?? "off") as any);
     const extracted = cfg.messages
-      ? extractSavedArchiveBlocks(cfg.messages as any[])
+      ? extractSavedCompactionState(cfg.messages as any[])
       : {
           messages: (prev?.agent.state.messages ?? []).filter((m: any) => m.role !== "system"),
-          blocks: prev?.compactor.getArchiveBlocks() ?? [],
+          persisted: prev?.compactor.serializePersistedState() ?? null,
         };
 
     const compactionCfg = normalizeCompactionConfig(cfg.compaction);
@@ -71,15 +72,14 @@ export class SessionManager {
       model,
       cfg.systemPrompt,
       compactionCfg,
-      extracted.blocks,
+      extracted.persisted,
     );
+
+    const effectiveSystemPrompt = `${cfg.systemPrompt}${compactor.getSystemPromptAddition()}`;
 
     let agentRef: Agent | null = null;
     const acpTools = compactor.createAcpTools(
       () => agentRef?.state.messages ?? [],
-      (next) => {
-        if (agentRef) agentRef.state.messages = next;
-      },
       () => this.saveTranscript(cfg.session),
     );
     const allTools = [...createPhoneTools(cfg.session, cfg.toolSpecs ?? []), ...acpTools];
@@ -87,19 +87,15 @@ export class SessionManager {
     const agent = new Agent({
       initialState: {
         messages: extracted.messages,
-        systemPrompt: cfg.systemPrompt,
+        systemPrompt: effectiveSystemPrompt,
         model,
         thinkingLevel: thinkingLevel as any,
         tools: allTools,
       },
       sessionId: cfg.session,
       beforeToolCall: async (ctx: BeforeToolCallContext) => {
-        // Native in-process ACP tools never touch the phone screen — bypass Kotlin safety gate
-        if (
-          ctx.toolCall.name === "context_compress" ||
-          ctx.toolCall.name === "context_search" ||
-          ctx.toolCall.name === "context_expand"
-        ) {
+        // Native in-process acp-kernel tools never touch the phone screen — bypass Kotlin safety gate
+        if (ACP_KERNEL_TOOL_NAMES.has(ctx.toolCall.name)) {
           return undefined;
         }
         const verdict = await bridgeCall("before_tool", {
@@ -125,7 +121,7 @@ export class SessionManager {
       transformContext: async (messages, signal) => {
         try {
           const pruned = await pruneOldScreens(messages);
-          return await compactor.maybeAutoCompact(
+          return await compactor.transformMessages(
             pruned,
             (replaced) => {
               agent.state.messages = replaced;
@@ -192,14 +188,13 @@ export class SessionManager {
     const s = this.sessions.get(sessionId);
     if (!s || s.running) return;
     const pruned = await pruneOldScreens(s.agent.state.messages);
-    const res = await s.compactor.compactMessages(pruned);
-    if (res) {
-      s.agent.state.messages = res.messages;
-      this.saveTranscript(sessionId);
-      s.compactor.emitUsage(res.messages);
-    } else {
-      s.compactor.emitUsage(s.agent.state.messages);
-    }
+    await s.compactor.manualCompact(
+      pruned,
+      (replaced) => {
+        s.agent.state.messages = replaced;
+      },
+      () => this.saveTranscript(sessionId),
+    );
   }
 
   abort(sessionId: string) {
@@ -284,9 +279,9 @@ export class SessionManager {
     const s = this.sessions.get(sessionId);
     if (s) {
       const cleaned = savableTranscript(s.agent.state.messages) as any[];
-      const blocks = s.compactor.getArchiveBlocks();
-      if (blocks.length > 0) {
-        cleaned.push({ role: ARCHIVE_META_ROLE, blocks });
+      const persisted = s.compactor.serializePersistedState();
+      if (persisted) {
+        cleaned.push({ role: ARCHIVE_META_ROLE, ...persisted });
       }
       bridge({
         type: "transcript",
