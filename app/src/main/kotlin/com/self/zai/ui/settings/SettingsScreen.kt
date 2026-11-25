@@ -35,12 +35,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -97,6 +99,7 @@ fun SettingsScreen(
     providerQuotas: Map<String, ProviderQuota>,
     defaultModel: ModelOption?,
     defaultThinkingLevel: String,
+    piReady: Boolean = true,
     piVersion: String,
     hotUpdateTag: String?,
     latestRelease: ReleaseUpdateInfo?,
@@ -118,6 +121,7 @@ fun SettingsScreen(
     onShizukuInstallApk: suspend (File) -> Result<String>,
     onReloadPiHotUpdate: () -> Unit,
     onResetPiHotUpdate: () -> Unit,
+    onRunSelfCheckPrompt: (String) -> Unit = {},
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -135,6 +139,7 @@ fun SettingsScreen(
 
     var showDefaultModelSheet by remember { mutableStateOf(false) }
     var showUserPromptSheet by remember { mutableStateOf(false) }
+    var showSelfCheckSheet by remember { mutableStateOf(false) }
     var showCompactionConfig by remember { mutableStateOf(false) }
     var showAdvancedControl by remember { mutableStateOf(false) }
     var showSystemPerms by remember { mutableStateOf(false) }
@@ -418,6 +423,16 @@ fun SettingsScreen(
 
             // 4. Phone Control (essential items visible, technical options tucked cleanly)
             ZaiPaperGroup(title = "手机操控") {
+                val modelReady = piReady && defaultModel != null
+                val controlReady = accessibilityConnected || shizukuStatus.isReady
+                CompactNavRow(
+                    title = "首次配置自检与试跑",
+                    value = if (modelReady && controlReady) "可试跑" else "待检查",
+                    onClick = { showSelfCheckSheet = true },
+                )
+
+                ZaiInsetDivider()
+
                 val a11yColor = when {
                     accessibilityConnected -> MaterialTheme.colorScheme.secondary
                     a11ySettingOn -> MaterialTheme.colorScheme.error
@@ -787,7 +802,7 @@ fun SettingsScreen(
                             }
                         }
 
-                        if (rel.piHotDownloadUrl.isNotBlank()) {
+                        if (rel.piHotDownloadUrl.isNotBlank() && rel.piHotManifestDownloadUrl.isNotBlank()) {
                             ZaiSecondaryButton(
                                 text = "热更新 Pi 内核 (${rel.tagName})",
                                 enabled = !updateBusy && !updateChecking,
@@ -798,14 +813,15 @@ fun SettingsScreen(
                                         val res = AppUpdater.applyPiHotUpdate(
                                             context = context,
                                             downloadUrl = rel.piHotDownloadUrl,
+                                            manifestUrl = rel.piHotManifestDownloadUrl,
                                             tagName = rel.tagName,
                                             onProgress = { p -> updateProgress = p },
                                         )
                                         updateBusy = false
                                         res.onSuccess { tag ->
                                             onReloadPiHotUpdate()
-                                            updateStatusText = "内核已热更 $tag"
-                                            Toast.makeText(context, "Pi 热更新已生效", Toast.LENGTH_SHORT).show()
+                                            updateStatusText = "内核已热更 $tag（签名已校验）"
+                                            Toast.makeText(context, "Pi 热更新已验签并生效", Toast.LENGTH_SHORT).show()
                                         }.onFailure { err ->
                                             updateStatusText = err.message ?: "热更新失败"
                                         }
@@ -881,6 +897,122 @@ fun SettingsScreen(
             onSave = onUpdateUserPrompt,
             onDismiss = { showUserPromptSheet = false },
         )
+    }
+
+    if (showSelfCheckSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val modelReady = piReady && defaultModel != null
+        val controlReady = accessibilityConnected || shizukuStatus.isReady
+        val canAutoRepair = !accessibilityConnected && (hasWriteSecure || shizukuStatus.isReady)
+        ModalBottomSheet(
+            onDismissRequest = { showSelfCheckSheet = false },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .navigationBarsPadding(),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "配置自检与试跑",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { showSelfCheckSheet = false }) {
+                        Text("跳过")
+                    }
+                }
+
+                Text(
+                    text = "通过一个小任务（打开系统设置并读出页面标题）一次验证模型连接、打开应用与读屏通道。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                ZaiPaperGroup {
+                    CompactStatusRow(
+                        dotColor = if (modelReady) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
+                        title = "1. 模型与引擎",
+                        statusText = when {
+                            !piReady -> "引擎初始化中"
+                            defaultModel == null -> "未配置账号"
+                            else -> defaultModel.name.take(14)
+                        },
+                        actionLabel = if (modelReady) "正常" else "去配置",
+                        onAction = {
+                            if (!modelReady) {
+                                showSelfCheckSheet = false
+                                onOpenModels()
+                            }
+                        },
+                    )
+                    ZaiInsetDivider()
+                    CompactStatusRow(
+                        dotColor = if (controlReady) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
+                        title = "2. 手机操控通道",
+                        statusText = when {
+                            accessibilityConnected -> "无障碍已连"
+                            shizukuStatus.isReady -> "Shizuku 就绪"
+                            a11ySettingOn -> "无障碍已脱绑"
+                            else -> "未开启"
+                        },
+                        actionLabel = when {
+                            controlReady -> "正常"
+                            canAutoRepair -> "一键恢复"
+                            else -> "去开启"
+                        },
+                        onAction = {
+                            when {
+                                controlReady -> Unit
+                                canAutoRepair -> scope.launch {
+                                    val res = onRepairAccessibility()
+                                    val msg = res.fold(
+                                        onSuccess = { "已恢复无障碍" },
+                                        onFailure = { "恢复失败：${it.message}" },
+                                    )
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                    if (res.isFailure) DevicePermissionHelper.openAccessibilitySettings(context)
+                                }
+                                else -> DevicePermissionHelper.openAccessibilitySettings(context)
+                            }
+                        },
+                    )
+                }
+
+                val blockerHint = when {
+                    !piReady -> "当前卡在：Pi 引擎仍在启动，请稍等 1-2 秒。"
+                    defaultModel == null -> "当前卡在：尚未登录模型账号或添加渠道，请点上方「去配置」。"
+                    !controlReady -> "当前卡在：无障碍和 Shizuku 均未就绪，请点上方「去开启」打开无障碍服务。"
+                    else -> null
+                }
+                if (blockerHint != null) {
+                    Text(
+                        text = blockerHint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
+                ZaiPrimaryButton(
+                    text = if (modelReady && controlReady) "开始试跑：打开设置并读标题" else "请先完成上方红点项",
+                    enabled = modelReady && controlReady,
+                    onClick = {
+                        showSelfCheckSheet = false
+                        onRunSelfCheckPrompt("请打开系统设置，并读出当前页面的顶部标题告诉我。")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(14.dp))
+            }
+        }
     }
 }
 

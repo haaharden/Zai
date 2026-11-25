@@ -1,6 +1,9 @@
 package com.self.zai.assistant
 
+import android.annotation.SuppressLint
+import android.app.KeyguardManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.service.quicksettings.Tile
@@ -28,7 +31,8 @@ class ZaiAssistTileService : TileService() {
             return
         }
         AssistantContextBridge.clearScreenContext()
-        val svc = ZaiAccessibilityService.instance
+        val isLocked = (getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
+        val svc = if (isLocked) null else ZaiAccessibilityService.instance
         if (svc != null) {
             val dm = resources.displayMetrics
             val snap = runCatching { svc.captureScreenTree(dm.widthPixels, dm.heightPixels) }.getOrNull()
@@ -63,8 +67,13 @@ class ZaiAssistTileService : TileService() {
             )
             startActivityAndCollapse(pi)
         } else {
-            @Suppress("DEPRECATION")
-            startActivityAndCollapse(intent)
+            startActivityAndCollapseLegacy(intent)
         }
+    }
+
+    @Suppress("DEPRECATION")
+    @SuppressLint("StartActivityAndCollapseDeprecated")
+    private fun startActivityAndCollapseLegacy(intent: Intent) {
+        startActivityAndCollapse(intent)
     }
 }

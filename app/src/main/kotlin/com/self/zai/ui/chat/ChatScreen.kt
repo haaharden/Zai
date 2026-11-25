@@ -1,5 +1,6 @@
 package com.self.zai.ui.chat
 
+import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -48,6 +49,7 @@ import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Stop
@@ -65,6 +67,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -79,6 +82,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -112,6 +116,7 @@ import com.self.zai.ui.components.ZaiThinkingPickerSheet
 fun ChatScreen(
     session: ChatSession,
     allSessions: List<ChatSession>,
+    storageBytes: Long = 0L,
     providers: List<ProviderStatus>,
     providerQuotas: Map<String, ProviderQuota>,
     enabledSkills: List<SkillEntry>,
@@ -120,6 +125,7 @@ fun ChatScreen(
     contextUsage: SessionContextUsage?,
     piReady: Boolean,
     isRunning: Boolean,
+    runningSessionId: String? = null,
     liveStepLabel: String,
     shizukuStatus: ShizukuStatus,
     accessibilityConnected: Boolean,
@@ -134,6 +140,7 @@ fun ChatScreen(
     onCompactSession: () -> Unit,
     onSendMessage: (String) -> Unit,
     onStopRun: () -> Unit,
+    onFocusRunningSession: () -> Unit = {},
     onSelectSession: (String) -> Unit,
     onNewSession: () -> Unit,
     onDeleteSession: (String) -> Unit,
@@ -143,6 +150,7 @@ fun ChatScreen(
     onOpenSettings: () -> Unit,
     onResolveConfirmation: (callId: String, allow: Boolean) -> Unit,
 ) {
+    val context = LocalContext.current
     var showSessionsSheet by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showThinkingPicker by remember { mutableStateOf(false) }
@@ -151,6 +159,14 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
 
     val hasControlChannel = accessibilityConnected || shizukuStatus.isReady
+    val isCurrentSessionRunning = isRunning && (runningSessionId == null || runningSessionId == session.id)
+    val backgroundRunningSession = remember(isRunning, runningSessionId, session.id, allSessions) {
+        if (isRunning && runningSessionId != null && runningSessionId != session.id) {
+            allSessions.firstOrNull { it.id == runningSessionId }
+        } else {
+            null
+        }
+    }
 
     // Smart bottom-pinning: respects manual scroll-up so reading history is never interrupted
     var autoFollowBottom by remember(session.id) { mutableStateOf(true) }
@@ -283,6 +299,68 @@ fun ChatScreen(
             }
         }
 
+        // Background-task status strip when user browses another chat while an earlier session is still running
+        if (backgroundRunningSession != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(0.6.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                    .clickable(onClick = onFocusRunningSession)
+                    .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                )
+                Spacer(Modifier.width(9.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "「${backgroundRunningSession.title.take(14)}」正在后台运行",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (liveStepLabel.isNotBlank()) {
+                        Text(
+                            text = liveStepLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Text(
+                    text = "查看",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onFocusRunningSession)
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                )
+                Text(
+                    text = "停止",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onStopRun)
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                )
+            }
+        }
+
         // Subtle actionable setup strip when needed (accent left bar, zero boxy alert feel)
         if (sessionModel == null || !hasControlChannel) {
             val missingModel = sessionModel == null
@@ -338,7 +416,7 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(22.dp),
                 ) {
                     items(session.messages, key = { it.id }) { msg ->
-                        val isLatestAssistant = isRunning && msg.id == session.messages.lastOrNull()?.id
+                        val isLatestAssistant = isCurrentSessionRunning && msg.id == session.messages.lastOrNull()?.id
                         when (msg.role) {
                             MessageRole.USER -> UserBubble(msg.text)
                             MessageRole.ASSISTANT -> AssistantTurn(
@@ -547,7 +625,8 @@ fun ChatScreen(
                         Text(
                             text = when {
                                 isVoiceListening -> "聆听中…"
-                                isRunning -> "输入可随时补充…"
+                                isCurrentSessionRunning -> "输入可随时补充…"
+                                backgroundRunningSession != null -> "后台有任务运行中…"
                                 else -> "问 Zai…"
                             },
                             style = MaterialTheme.typography.bodyLarge,
@@ -783,9 +862,12 @@ fun ChatScreen(
         )
     }
 
-    // Sessions bottom sheet
+    // Sessions bottom sheet (paginated by 40, with total storage size and Markdown export)
     if (showSessionsSheet) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        var visibleLimit by remember(showSessionsSheet) { mutableIntStateOf(40) }
+        val visibleSessions = remember(allSessions, visibleLimit) { allSessions.take(visibleLimit) }
+        val remainingCount = (allSessions.size - visibleSessions.size).coerceAtLeast(0)
         ModalBottomSheet(
             onDismissRequest = { showSessionsSheet = false },
             sheetState = sheetState,
@@ -801,12 +883,23 @@ fun ChatScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "对话记录",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "对话记录",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        val sizeText = formatStorageBytes(storageBytes)
+                        Text(
+                            text = if (sizeText.isNotEmpty()) {
+                                "${allSessions.size} 个对话 · 占用 $sizeText"
+                            } else {
+                                "${allSessions.size} 个对话"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     TextButton(
                         onClick = {
                             showSessionsSheet = false
@@ -824,8 +917,9 @@ fun ChatScreen(
                         .fillMaxWidth()
                         .heightIn(max = 420.dp),
                 ) {
-                    itemsIndexed(allSessions, key = { _, item -> item.id }) { idx, item ->
+                    itemsIndexed(visibleSessions, key = { _, item -> item.id }) { idx, item ->
                         val selected = item.id == session.id
+                        val itemRunning = isRunning && item.id == runningSessionId
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -841,12 +935,15 @@ fun ChatScreen(
                                 .padding(horizontal = 12.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            if (selected) {
+                            if (selected || itemRunning) {
                                 Box(
                                     modifier = Modifier
                                         .size(6.dp)
                                         .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primary),
+                                        .background(
+                                            if (itemRunning) MaterialTheme.colorScheme.error
+                                            else MaterialTheme.colorScheme.primary,
+                                        ),
                                 )
                                 Spacer(Modifier.width(10.dp))
                             }
@@ -854,16 +951,37 @@ fun ChatScreen(
                                 Text(
                                     text = item.title,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    fontWeight = if (selected || itemRunning) FontWeight.SemiBold else FontWeight.Normal,
                                     color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    text = "${item.messages.size} 条记录",
+                                    text = if (itemRunning) {
+                                        "${item.messages.size} 条记录 · 运行中"
+                                    } else {
+                                        "${item.messages.size} 条记录"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (itemRunning) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
                                 )
+                            }
+                            if (item.messages.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { shareSessionAsMarkdown(context, item) },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.IosShare,
+                                        contentDescription = "导出对话",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(17.dp),
+                                    )
+                                }
                             }
                             if (allSessions.size > 1) {
                                 IconButton(
@@ -879,8 +997,22 @@ fun ChatScreen(
                                 }
                             }
                         }
-                        if (idx < allSessions.lastIndex) {
+                        if (idx < visibleSessions.lastIndex) {
                             ZaiInsetDivider()
+                        }
+                    }
+                    if (remainingCount > 0) {
+                        item(key = "load_more_sessions") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                TextButton(onClick = { visibleLimit += 40 }) {
+                                    Text("加载更早对话（还有 $remainingCount 条）")
+                                }
+                            }
                         }
                     }
                 }
@@ -1284,5 +1416,39 @@ private fun ChatMicButton(
                     .alpha(pulse),
             )
         }
+    }
+}
+
+private fun formatStorageBytes(bytes: Long): String {
+    if (bytes <= 0L) return ""
+    return when {
+        bytes < 1024L -> "${bytes} B"
+        bytes < 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
+        else -> String.format(java.util.Locale.US, "%.2f MB", bytes / (1024.0 * 1024.0))
+    }
+}
+
+private fun shareSessionAsMarkdown(context: android.content.Context, session: ChatSession) {
+    val md = buildString {
+        append("# ").append(session.title).append("\n\n")
+        for (msg in session.messages) {
+            val heading = when (msg.role) {
+                MessageRole.USER -> "## 用户"
+                MessageRole.ASSISTANT -> "## Zai"
+                MessageRole.SYSTEM_NOTE -> "## 系统记录"
+            }
+            append(heading).append("\n\n")
+            if (msg.text.isNotBlank()) {
+                append(msg.text.trim()).append("\n\n")
+            }
+        }
+    }.trim()
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, session.title)
+        putExtra(Intent.EXTRA_TEXT, md)
+    }
+    runCatching {
+        context.startActivity(Intent.createChooser(intent, "导出对话"))
     }
 }

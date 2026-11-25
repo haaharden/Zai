@@ -2,10 +2,16 @@ package com.self.zai
 
 import com.self.zai.data.ModelDiscoveryClient
 import com.self.zai.update.AppUpdater
+import com.self.zai.update.PiHotUpdateVerifier
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.security.KeyPairGenerator
+import java.security.Signature
+import java.security.spec.ECGenParameterSpec
+import java.util.Base64
 
 class ZaiUnitTests {
 
@@ -113,5 +119,68 @@ class ZaiUnitTests {
         assertTrue(AppUpdater.shouldDiscardHotUpdate("0.1.10", "v0.1.10"))
         assertTrue(AppUpdater.shouldDiscardHotUpdate("0.1.10", ""))
         assertFalse(AppUpdater.shouldDiscardHotUpdate("0.1.10", "v0.1.11"))
+    }
+
+    @Test
+    fun piHotUpdateVerifier_acceptsValidEcdsaManifest_andRejectsTamperedOrWrongTag() {
+        val kpg = KeyPairGenerator.getInstance("EC").apply {
+            initialize(ECGenParameterSpec("secp256r1"))
+        }
+        val pair = kpg.generateKeyPair()
+        val pubB64 = Base64.getEncoder().encodeToString(pair.public.encoded)
+
+        val bundleText = buildString {
+            append("// ZaiHost ZaiBridge\n")
+            repeat(1_200) { append("var x$it = $it;\n") }
+        }
+        val bundleBytes = bundleText.toByteArray(Charsets.UTF_8)
+        val sha256 = PiHotUpdateVerifier.sha256Hex(bundleBytes)
+        val tag = "v0.2.6"
+        val size = bundleBytes.size.toLong()
+        val payloadRaw = JSONObject()
+            .put("tag", tag)
+            .put("sha256", sha256)
+            .put("size", size)
+            .put("issuedAt", "2026-11-25T14:00:00Z")
+            .toString()
+
+        val sigBytes = Signature.getInstance("SHA256withECDSA").run {
+            initSign(pair.private)
+            update(payloadRaw.toByteArray(Charsets.UTF_8))
+            sign()
+        }
+        val sigB64 = Base64.getEncoder().encodeToString(sigBytes)
+
+        val manifest = JSONObject()
+            .put("payload", payloadRaw)
+            .put("signature", sigB64)
+            .toString()
+
+        // Valid signed bundle passes
+        val ok = PiHotUpdateVerifier.verifyBundle(
+            manifestJson = manifest,
+            bundleBytes = bundleBytes,
+            expectedTag = "v0.2.6",
+            publicKeySpkiBase64 = pubB64,
+        )
+        assertTrue("Expected valid signed bundle to verify: ${ok.exceptionOrNull()}", ok.isSuccess)
+        assertEquals("v0.2.6", ok.getOrThrow().tag)
+
+        // Tampered 1 byte in bundle fails
+        val tamperedBytes = bundleBytes.copyOf().also { it[it.lastIndex] = 'Z'.code.toByte() }
+        assertTrue(
+            PiHotUpdateVerifier.verifyBundle(manifest, tamperedBytes, "v0.2.6", pubB64).isFailure,
+        )
+
+        // Mismatched expected tag fails (prevents downgrade/tag swap)
+        assertTrue(
+            PiHotUpdateVerifier.verifyBundle(manifest, bundleBytes, "v0.2.7", pubB64).isFailure,
+        )
+
+        // Wrong public key fails
+        val otherPub = Base64.getEncoder().encodeToString(kpg.generateKeyPair().public.encoded)
+        assertTrue(
+            PiHotUpdateVerifier.verifyBundle(manifest, bundleBytes, "v0.2.6", otherPub).isFailure,
+        )
     }
 }

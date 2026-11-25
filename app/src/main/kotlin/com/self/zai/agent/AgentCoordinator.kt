@@ -40,8 +40,12 @@ import java.util.concurrent.ConcurrentHashMap
  * Android WindowManager / ForegroundService details and remains directly unit-testable.
  */
 interface RunChromeHost {
-    fun showOperatingOverlay(showCapsule: Boolean, showEdgeGlow: Boolean)
-    fun showCompletedBanner()
+    fun showOperatingOverlay(
+        showCapsule: Boolean,
+        showEdgeGlow: Boolean,
+        statusLabel: String = "正在操作手机",
+    )
+    fun showCompletedBanner(statusLabel: String = "已完成，点此返回")
     fun dismissOverlay()
     fun updateForegroundStatus(status: String)
     fun stopForegroundService()
@@ -79,6 +83,9 @@ class AgentCoordinator(
 
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
+    private val _runningSessionId = MutableStateFlow<String?>(null)
+    val runningSessionId: StateFlow<String?> = _runningSessionId.asStateFlow()
 
     private val _liveStepLabel = MutableStateFlow("")
     val liveStepLabel: StateFlow<String> = _liveStepLabel.asStateFlow()
@@ -146,8 +153,12 @@ class AgentCoordinator(
         }
     }
 
+    fun focusRunningSession() {
+        val target = _runningSessionId.value ?: return
+        selectSession(target)
+    }
+
     fun startNewSession(): ChatSession {
-        if (_isRunning.value) stopActiveRun()
         val defModel = modelSelection.defaultModelOption()
         val defThinking = defModel?.clampThinking(repository.settings.value.thinkingLevel)
             ?: repository.settings.value.thinkingLevel
@@ -162,7 +173,7 @@ class AgentCoordinator(
     }
 
     fun deleteSession(sessionId: String) {
-        if (_activeSessionId.value == sessionId && _isRunning.value) {
+        if (_runningSessionId.value == sessionId && _isRunning.value) {
             stopActiveRun()
         }
         runtime.disposeSession(sessionId)
@@ -373,17 +384,24 @@ class AgentCoordinator(
         _liveStepLabel.value = label
     }
 
-    fun onPhoneOperationStep() {
+    fun onPhoneOperationStep(targetAppLabel: String = "") {
         onDismissAssistantOverlay()
-        _liveStepLabel.value = "正在操作手机"
+        val opText = if (targetAppLabel.isNotBlank()) "正在操作$targetAppLabel" else "正在操作手机"
+        _liveStepLabel.value = opText
+        val runningTitle = _runningSessionId.value
+            ?.let { id -> repository.sessions.value.firstOrNull { it.id == id }?.title }
+            ?.takeIf { it.isNotBlank() && it != "新对话" }
+            ?.take(8)
+        val capsuleLabel = if (runningTitle != null) "$runningTitle · $opText" else opText
         val s = repository.settings.value
         if (s.showFloatingCapsule || s.showEdgeGlow) {
             chromeHost.showOperatingOverlay(
                 showCapsule = s.showFloatingCapsule,
                 showEdgeGlow = s.showEdgeGlow,
+                statusLabel = capsuleLabel,
             )
         }
-        ensureForegroundServiceRunning("正在操作手机")
+        ensureForegroundServiceRunning(capsuleLabel)
     }
 
     fun sendUserMessage(rawText: String, extraContextForModel: String? = null): Result<Unit> {
@@ -440,6 +458,17 @@ class AgentCoordinator(
         }
 
         if (_isRunning.value) {
+            val activeRunId = _runningSessionId.value
+            if (activeRunId != null && activeRunId != sessionId) {
+                val runningTitle = repository.sessions.value
+                    .firstOrNull { it.id == activeRunId }
+                    ?.title
+                    ?.ifBlank { "另一个对话" }
+                    ?: "另一个对话"
+                return Result.failure(
+                    IllegalStateException("「$runningTitle」正在运行中，请先停止或切回该对话"),
+                )
+            }
             val followUpPlaceholder = ChatMessage(
                 id = "m_${UUID.randomUUID().toString().take(8)}",
                 role = MessageRole.ASSISTANT,
@@ -505,6 +534,7 @@ class AgentCoordinator(
             configuredSessions[sessionId] = configKey
         }
 
+        _runningSessionId.value = sessionId
         _isRunning.value = true
         _liveStepLabel.value = "思考中…"
         // Only elevate to a foreground service on demand (phone automation or backgrounded run)
@@ -516,14 +546,15 @@ class AgentCoordinator(
     }
 
     fun stopActiveRun() {
-        val sessionId = _activeSessionId.value
+        val targetSessionId = _runningSessionId.value ?: _activeSessionId.value
         phoneController.clearPendingConfirmations()
-        runtime.abort(sessionId)
+        runtime.abort(targetSessionId)
+        _runningSessionId.value = null
         _isRunning.value = false
         _liveStepLabel.value = ""
         chromeHost.dismissOverlay()
         stopForegroundServiceIfActive()
-        updateLastAssistantMessage(sessionId, flushImmediately = true) { msg ->
+        updateLastAssistantMessage(targetSessionId, flushImmediately = true) { msg ->
             val closedSteps = msg.steps.map {
                 if (it.state == StepState.RUNNING) it.copy(state = StepState.ERROR, detail = "已停止") else it
             }
@@ -547,6 +578,7 @@ class AgentCoordinator(
             repository.settings.value.returnToZaiOnFinish &&
             !isAppInForeground
 
+        _runningSessionId.value = null
         _isRunning.value = false
         _liveStepLabel.value = ""
         repository.flushNow()
@@ -557,11 +589,17 @@ class AgentCoordinator(
             return
         }
 
-        val summary = sessionId?.let { id ->
+        val finishedSession = sessionId?.let { id ->
             repository.sessions.value.firstOrNull { it.id == id }
-                ?.messages?.lastOrNull { it.role == MessageRole.ASSISTANT }
-                ?.text?.lineSequence()?.firstOrNull()?.take(50)
-        }.orEmpty()
+        }
+        val summary = finishedSession
+            ?.messages?.lastOrNull { it.role == MessageRole.ASSISTANT }
+            ?.text?.lineSequence()?.firstOrNull()?.take(50)
+            .orEmpty()
+        val doneTitle = finishedSession?.title
+            ?.takeIf { it.isNotBlank() && it != "新对话" }
+            ?.take(8)
+        val bannerLabel = if (doneTitle != null) "$doneTitle · 已完成，点此返回" else "已完成，点此返回"
 
         scope.launch {
             val returned = returnNavigator.attemptBringToFront { isAppInForeground }
@@ -569,7 +607,7 @@ class AgentCoordinator(
             if (returned) {
                 chromeHost.dismissOverlay()
             } else {
-                chromeHost.showCompletedBanner()
+                chromeHost.showCompletedBanner(bannerLabel)
                 chromeHost.postFinishedFallbackNotification(summary)
             }
         }
@@ -590,13 +628,14 @@ class AgentCoordinator(
                     is PiSessionEvent.RuntimeReset -> {
                         configuredSessions.clear()
                         if (_isRunning.value) {
-                            val activeId = _activeSessionId.value
+                            val targetId = _runningSessionId.value ?: _activeSessionId.value
                             phoneController.clearPendingConfirmations()
+                            _runningSessionId.value = null
                             _isRunning.value = false
                             _liveStepLabel.value = ""
                             chromeHost.dismissOverlay()
                             stopForegroundServiceIfActive()
-                            updateLastAssistantMessage(activeId, flushImmediately = true) { msg ->
+                            updateLastAssistantMessage(targetId, flushImmediately = true) { msg ->
                                 val closed = msg.steps.map {
                                     if (it.state == StepState.RUNNING) it.copy(state = StepState.ERROR) else it
                                 }
@@ -714,13 +753,15 @@ class AgentCoordinator(
                     }
 
                     is PiSessionEvent.Idle -> {
-                        if (event.sessionId == _activeSessionId.value) {
+                        val expectedId = _runningSessionId.value ?: _activeSessionId.value
+                        if (event.sessionId == expectedId) {
                             finishRunUiState(allowAutoReturn = true, sessionId = event.sessionId)
                         }
                     }
 
                     is PiSessionEvent.Error -> {
-                        if (event.sessionId == _activeSessionId.value) {
+                        val expectedId = _runningSessionId.value ?: _activeSessionId.value
+                        if (event.sessionId == expectedId) {
                             finishRunUiState(allowAutoReturn = true, sessionId = event.sessionId)
                         }
                         updateLastAssistantMessage(event.sessionId, flushImmediately = true) { msg ->

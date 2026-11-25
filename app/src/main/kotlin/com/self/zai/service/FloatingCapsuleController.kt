@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -39,6 +40,7 @@ import kotlin.math.abs
 class FloatingCapsuleController(
     private val context: Context,
     private val onStopRequested: () -> Unit,
+    private val onOpenRunningSession: () -> Unit = {},
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -56,10 +58,12 @@ class FloatingCapsuleController(
     private var showingCompletedBanner = false
     private var showCapsuleEnabled = true
     private var showEdgeEnabled = true
+    private var currentStatusText = "正在操作手机"
 
     fun show(
         showCapsule: Boolean = true,
         showEdgeGlow: Boolean = true,
+        statusLabel: String = "正在操作手机",
     ) {
         mainHandler.post {
             cancelAutoDismiss()
@@ -67,6 +71,7 @@ class FloatingCapsuleController(
             showingCompletedBanner = false
             showCapsuleEnabled = showCapsule
             showEdgeEnabled = showEdgeGlow
+            currentStatusText = statusLabel.ifBlank { "正在操作手机" }
 
             val resolved = resolveWindowHost() ?: return@post
             val (wm, winType) = resolved
@@ -96,7 +101,10 @@ class FloatingCapsuleController(
      * When background auto-return is blocked by OEM rules (e.g. Xiaomi "后台弹出界面" disabled),
      * turns the top Accessibility pill into a calm clickable banner so one real tap returns to Zai.
      */
-    fun showCompletedBanner(autoDismissMs: Long = 10_000L) {
+    fun showCompletedBanner(
+        statusLabel: String = "已完成，点此返回",
+        autoDismissMs: Long = 10_000L,
+    ) {
         mainHandler.post {
             cancelAutoDismiss()
             val resolved = resolveWindowHost() ?: return@post
@@ -125,7 +133,7 @@ class FloatingCapsuleController(
                 shape = GradientDrawable.OVAL
                 setColor(Color.rgb(94, 179, 132))
             }
-            labelView?.text = "已完成，点此返回"
+            labelView?.text = statusLabel.ifBlank { "已完成，点此返回" }
             stopButtonView?.visibility = View.GONE
             capsuleView?.visibility = View.VISIBLE
 
@@ -199,7 +207,7 @@ class FloatingCapsuleController(
             setColor(Color.rgb(217, 119, 87))
         }
         startDotPulse()
-        labelView?.text = "正在操作手机"
+        labelView?.text = currentStatusText
         stopButtonView?.visibility = View.VISIBLE
     }
 
@@ -303,10 +311,13 @@ class FloatingCapsuleController(
         }
 
         val statusLabel = TextView(context).apply {
-            text = "正在操作手机"
+            text = currentStatusText
             setTextColor(Color.rgb(243, 241, 234))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
             paint.isFakeBoldText = true
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            maxWidth = dp(215)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -373,6 +384,7 @@ class FloatingCapsuleController(
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!moved) {
+                        onOpenRunningSession()
                         val openIntent = Intent(context, MainActivity::class.java).apply {
                             addFlags(
                                 Intent.FLAG_ACTIVITY_NEW_TASK or

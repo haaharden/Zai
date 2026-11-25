@@ -2,6 +2,7 @@ package com.self.zai.data
 
 import com.self.zai.model.AppSettings
 import com.self.zai.model.ChatSession
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -11,6 +12,8 @@ import kotlinx.coroutines.flow.StateFlow
 interface SessionRepository {
     val settings: StateFlow<AppSettings>
     val sessions: StateFlow<List<ChatSession>>
+    val storageBytes: StateFlow<Long>
+        get() = MutableStateFlow(0L)
 
     fun updateSettings(transform: (AppSettings) -> AppSettings): AppSettings
     fun upsertSession(session: ChatSession, flushImmediately: Boolean = false)

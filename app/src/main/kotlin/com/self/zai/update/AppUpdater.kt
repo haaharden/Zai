@@ -29,6 +29,7 @@ data class ReleaseUpdateInfo(
     val apkDownloadUrl: String,
     val apkSizeBytes: Long,
     val piHotDownloadUrl: String,
+    val piHotManifestDownloadUrl: String = "",
     val piHotSizeBytes: Long,
     val htmlUrl: String,
     val isNewer: Boolean,
@@ -37,14 +38,18 @@ data class ReleaseUpdateInfo(
 /**
  * Dual-mode in-app updater backed by GitHub Releases:
  * 1. Full signed APK self-update (via Android Package Installer or rapid Shizuku install).
- * 2. True hot-update of the Pi JS agent kernel (`zai-pi-host.js`) without reinstalling the APK.
+ * 2. Signed hot-update of the Pi JS agent kernel (`zai-pi-host.js` + `zai-pi-host.manifest.json`)
+ *    verified against the embedded ECDSA P-256 publisher public key with automatic rollback on boot failure.
  */
 object AppUpdater {
 
     const val PI_HOT_DIR_NAME = "pi_hot"
+    private const val PI_HOT_PREV_DIR_NAME = "pi_hot_prev"
     const val PI_HOT_JS_NAME = "host.js"
     const val PI_HOT_HTML_NAME = "index.html"
     const val PI_HOT_VERSION_NAME = "version.txt"
+    private const val PI_HOT_PENDING_BOOT_FLAG = "pending_boot.flag"
+    private const val PI_HOT_BOOT_ATTEMPTS_NAME = "boot_attempts.txt"
 
     private val json = Json { ignoreUnknownKeys = true }
     private val http = OkHttpClient.Builder()
@@ -88,6 +93,10 @@ object AppUpdater {
                     val n = it["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     n.equals("zai-pi-host.js", ignoreCase = true) || n.equals("host.js", ignoreCase = true)
                 }
+                val piManifestAsset = assets.firstOrNull {
+                    val n = it["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    n.equals(PiHotUpdateVerifier.MANIFEST_ASSET_NAME, ignoreCase = true)
+                }
 
                 ReleaseUpdateInfo(
                     tagName = tag,
@@ -97,6 +106,7 @@ object AppUpdater {
                     apkDownloadUrl = apkAsset?.get("browser_download_url")?.jsonPrimitive?.contentOrNull.orEmpty(),
                     apkSizeBytes = apkAsset?.get("size")?.jsonPrimitive?.longOrNull ?: 0L,
                     piHotDownloadUrl = piHotAsset?.get("browser_download_url")?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    piHotManifestDownloadUrl = piManifestAsset?.get("browser_download_url")?.jsonPrimitive?.contentOrNull.orEmpty(),
                     piHotSizeBytes = piHotAsset?.get("size")?.jsonPrimitive?.longOrNull ?: 0L,
                     htmlUrl = htmlUrl,
                     isNewer = isRemoteVersionNewer(BuildConfig.VERSION_NAME, version),
@@ -164,39 +174,130 @@ object AppUpdater {
     }
 
     /**
-     * Downloads and atomically activates a hot-updated Pi JS bundle without reinstalling the APK.
+     * Downloads, cryptographically verifies (ECDSA P-256 + SHA-256), and stages a hot-updated Pi JS bundle
+     * with automatic rollback backup of the previously verified kernel.
      */
     suspend fun applyPiHotUpdate(
         context: Context,
         downloadUrl: String,
+        manifestUrl: String,
         tagName: String,
         onProgress: (Float) -> Unit,
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             require(downloadUrl.isNotBlank()) { "该 Release 未附带 Pi 热更新包 (zai-pi-host.js)" }
-            val dir = File(context.filesDir, PI_HOT_DIR_NAME).apply { mkdirs() }
-            val tmpFile = File(dir, "$PI_HOT_JS_NAME.tmp")
-            if (tmpFile.exists()) tmpFile.delete()
-
-            streamDownload(downloadUrl, tmpFile, onProgress)
-
-            require(tmpFile.length() > 10_000L) { "下载的 Pi 内核文件不完整" }
-            val tailCheck = tmpFile.readText(Charsets.UTF_8)
-            require(tailCheck.contains("ZaiHost") && tailCheck.contains("ZaiBridge")) {
-                "热更新文件校验失败：不是有效的 Zai Pi 内核"
+            require(manifestUrl.isNotBlank()) {
+                "该 Release 缺少签名清单 (${PiHotUpdateVerifier.MANIFEST_ASSET_NAME})，拒绝加载未签名内核"
             }
 
-            val finalJs = File(dir, PI_HOT_JS_NAME)
-            if (finalJs.exists()) finalJs.delete()
-            require(tmpFile.renameTo(finalJs)) { "写入热更新内核失败" }
+            val stageDir = File(context.cacheDir, "pi_hot_stage").apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            val manifestFile = File(stageDir, PiHotUpdateVerifier.MANIFEST_ASSET_NAME)
+            val tmpFile = File(stageDir, "$PI_HOT_JS_NAME.tmp")
 
-            File(dir, PI_HOT_HTML_NAME).writeText(
-                """<!doctype html><meta charset="utf-8"><title>zai-pi-host</title><script src="host.js?t=${System.currentTimeMillis()}"></script>""",
-                Charsets.UTF_8,
-            )
-            File(dir, PI_HOT_VERSION_NAME).writeText(tagName.ifBlank { "hot" }, Charsets.UTF_8)
-            tagName
+            try {
+                streamDownload(manifestUrl, manifestFile) { p -> onProgress(p * 0.1f) }
+                streamDownload(downloadUrl, tmpFile) { p -> onProgress(0.1f + p * 0.85f) }
+
+                val manifestText = manifestFile.readText(Charsets.UTF_8)
+                val jsBytes = tmpFile.readBytes()
+                val verified = PiHotUpdateVerifier.verifyBundle(
+                    manifestJson = manifestText,
+                    bundleBytes = jsBytes,
+                    expectedTag = tagName,
+                ).getOrThrow()
+
+                val hotDir = File(context.filesDir, PI_HOT_DIR_NAME)
+                val prevDir = File(context.filesDir, PI_HOT_PREV_DIR_NAME)
+
+                // Preserve previous known-good hot bundle for automatic rollback if the new kernel fails to boot
+                if (hotDir.exists() &&
+                    File(hotDir, PI_HOT_JS_NAME).exists() &&
+                    !File(hotDir, PI_HOT_PENDING_BOOT_FLAG).exists()
+                ) {
+                    prevDir.deleteRecursively()
+                    hotDir.copyRecursively(prevDir, overwrite = true)
+                }
+
+                hotDir.mkdirs()
+                val finalJs = File(hotDir, PI_HOT_JS_NAME)
+                val swapTmp = File(hotDir, "$PI_HOT_JS_NAME.new")
+                swapTmp.writeBytes(jsBytes)
+                if (finalJs.exists()) finalJs.delete()
+                require(swapTmp.renameTo(finalJs)) { "写入热更新内核失败" }
+
+                File(hotDir, PI_HOT_HTML_NAME).writeText(
+                    """<!doctype html><meta charset="utf-8"><title>zai-pi-host</title><script src="host.js?t=${System.currentTimeMillis()}"></script>""",
+                    Charsets.UTF_8,
+                )
+                File(hotDir, PI_HOT_VERSION_NAME).writeText(verified.tag.ifBlank { tagName }, Charsets.UTF_8)
+                // Mark as unverified boot until WebView successfully emits "ready"
+                File(hotDir, PI_HOT_PENDING_BOOT_FLAG).writeText(System.currentTimeMillis().toString(), Charsets.UTF_8)
+                File(hotDir, PI_HOT_BOOT_ATTEMPTS_NAME).writeText("0", Charsets.UTF_8)
+                onProgress(1f)
+                verified.tag
+            } finally {
+                runCatching { stageDir.deleteRecursively() }
+            }
         }
+    }
+
+    /**
+     * Tracks startup attempts for an unverified hot bundle. If a prior boot attempt died before emitting
+     * `ready` (for example a hard process crash loop), rolls back automatically before loading WebView.
+     */
+    fun recordPiHotBootAttemptOrRollback(context: Context): Boolean {
+        val hotDir = File(context.filesDir, PI_HOT_DIR_NAME)
+        val pendingFlag = File(hotDir, PI_HOT_PENDING_BOOT_FLAG)
+        if (!pendingFlag.exists()) return false
+        val attemptsFile = File(hotDir, PI_HOT_BOOT_ATTEMPTS_NAME)
+        val priorAttempts = runCatching {
+            attemptsFile.readText(Charsets.UTF_8).trim().toIntOrNull() ?: 0
+        }.getOrDefault(0)
+        if (priorAttempts >= 1) {
+            rollbackPiHotUpdate(context)
+            return true
+        }
+        runCatching { attemptsFile.writeText((priorAttempts + 1).toString(), Charsets.UTF_8) }
+        return false
+    }
+
+    /** Called once the loaded hot-updated Pi WebView successfully completes startup (`ready`). */
+    fun confirmPiHotBootSuccess(context: Context) {
+        runCatching {
+            val hotDir = File(context.filesDir, PI_HOT_DIR_NAME)
+            File(hotDir, PI_HOT_PENDING_BOOT_FLAG).delete()
+            File(hotDir, PI_HOT_BOOT_ATTEMPTS_NAME).delete()
+            File(context.filesDir, PI_HOT_PREV_DIR_NAME).deleteRecursively()
+        }
+    }
+
+    fun isPiHotBootPending(context: Context): Boolean {
+        val flag = File(File(context.filesDir, PI_HOT_DIR_NAME), PI_HOT_PENDING_BOOT_FLAG)
+        return flag.exists()
+    }
+
+    /**
+     * Rolls back a failed hot-updated kernel to the previously confirmed hot bundle if available,
+     * otherwise clears `pi_hot` so the APK's bundled `assets/pi/host.js` takes over cleanly.
+     */
+    fun rollbackPiHotUpdate(context: Context): Boolean {
+        return runCatching {
+            val hotDir = File(context.filesDir, PI_HOT_DIR_NAME)
+            val prevDir = File(context.filesDir, PI_HOT_PREV_DIR_NAME)
+            hotDir.deleteRecursively()
+            if (prevDir.exists() && File(prevDir, PI_HOT_JS_NAME).length() > 10_000L) {
+                prevDir.copyRecursively(hotDir, overwrite = true)
+                File(hotDir, PI_HOT_PENDING_BOOT_FLAG).delete()
+                prevDir.deleteRecursively()
+                true
+            } else {
+                prevDir.deleteRecursively()
+                false
+            }
+        }.getOrDefault(false)
     }
 
     /**
@@ -228,6 +329,7 @@ object AppUpdater {
     fun clearPiHotUpdate(context: Context) {
         runCatching {
             File(context.filesDir, PI_HOT_DIR_NAME).deleteRecursively()
+            File(context.filesDir, PI_HOT_PREV_DIR_NAME).deleteRecursively()
         }
     }
 

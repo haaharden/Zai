@@ -167,8 +167,8 @@ class AssistantArchitectureTest {
                 override suspend fun attemptBringToFront(isForeground: () -> Boolean) = false
             },
             chromeHost = object : RunChromeHost {
-                override fun showOperatingOverlay(showCapsule: Boolean, showEdgeGlow: Boolean) {}
-                override fun showCompletedBanner() {}
+                override fun showOperatingOverlay(showCapsule: Boolean, showEdgeGlow: Boolean, statusLabel: String) {}
+                override fun showCompletedBanner(statusLabel: String) {}
                 override fun dismissOverlay() {}
                 override fun updateForegroundStatus(status: String) {}
                 override fun stopForegroundService() {}

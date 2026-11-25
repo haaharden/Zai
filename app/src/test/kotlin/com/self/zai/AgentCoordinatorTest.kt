@@ -60,15 +60,137 @@ class AgentCoordinatorTest {
             // Trigger second write so .bak is populated
             store1.upsertSession(created.copy(title = "最新标题"), flushImmediately = true)
 
-            // Simulate corrupted primary sessions file after abrupt kill
-            File(tempDir, "zai_sessions.json").writeText("{corrupted_json", Charsets.UTF_8)
+            // Simulate corrupted primary per-session file after abrupt kill
+            File(tempDir, "zai_sessions/${created.id}.json").writeText("{corrupted_json", Charsets.UTF_8)
 
             val store2 = SettingsStore(tempDir, ioDispatcher = Dispatchers.Unconfined, sessionDebounceMs = 0L)
             assertEquals("gpt-6.2-sol", store2.settings.value.activeModelId)
             assertTrue("Should recover session from .bak file", store2.sessions.value.isNotEmpty())
+            assertEquals("测试对话", store2.sessions.value.first().title)
         } finally {
             tempDir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun settingsStore_persistsOver40SessionsWithoutEviction_andMigratesLegacyFile() = runBlocking {
+        val tempDir = Files.createTempDirectory("zai_store_unlimited_test").toFile()
+        try {
+            // Seed a legacy monolithic zai_sessions.json with 5 conversations
+            val legacySessions = (1..5).map { i ->
+                ChatSession(id = "legacy_$i", title = "旧对话 $i", updatedAtMs = 1_000L + i)
+            }
+            val json = kotlinx.serialization.json.Json { encodeDefaults = true }
+            File(tempDir, "zai_sessions.json").writeText(
+                json.encodeToString(kotlinx.serialization.builtins.ListSerializer(ChatSession.serializer()), legacySessions),
+                Charsets.UTF_8,
+            )
+
+            val store1 = SettingsStore(tempDir, ioDispatcher = Dispatchers.Unconfined, sessionDebounceMs = 0L)
+            assertEquals(5, store1.sessions.value.size)
+            assertFalse("Legacy single file should be removed after migration", File(tempDir, "zai_sessions.json").exists())
+
+            // Save 41 additional distinct sessions (total 46 > old 40 cap)
+            for (i in 1..41) {
+                store1.upsertSession(
+                    ChatSession(id = "extra_$i", title = "对话 #$i", updatedAtMs = 10_000L + i),
+                    flushImmediately = true,
+                )
+            }
+            assertEquals(46, store1.sessions.value.size)
+            assertTrue(store1.storageBytes.value > 0L)
+
+            // Reload from disk and verify ZERO sessions were evicted
+            val store2 = SettingsStore(tempDir, ioDispatcher = Dispatchers.Unconfined, sessionDebounceMs = 0L)
+            assertEquals(46, store2.sessions.value.size)
+            assertTrue(store2.sessions.value.any { it.id == "legacy_1" })
+            assertTrue(store2.sessions.value.any { it.id == "extra_41" })
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun coordinator_stopActiveRun_abortsRunningSessionA_whenViewingSessionB() = runBlocking {
+        val repo = InMemorySessionRepository()
+        val vault = InMemoryVault()
+        val runtime = FakeAgentRuntime()
+        val chrome = FakeChromeHost()
+        val navigator = FakeReturnNavigator(shouldSucceed = true)
+
+        val solModel = ModelOption(
+            providerId = "openai-codex",
+            providerName = "ChatGPT Codex",
+            id = "gpt-6.2-sol",
+            name = "GPT-6.2 Sol",
+            contextWindow = 500_000,
+            supportsImages = true,
+            thinkingLevels = listOf("minimal", "high"),
+        )
+        runtime.setProviders(
+            listOf(
+                ProviderStatus(
+                    id = "openai-codex",
+                    name = "ChatGPT Codex",
+                    credentialType = "oauth",
+                    isCustom = false,
+                    supportsOAuth = true,
+                    models = listOf(solModel),
+                ),
+            ),
+        )
+
+        val phoneController = PhoneController(repo, StubDeviceChannel(), StubAppDirectory())
+        val fakeMcp = StubMcpClient()
+        val dispatcher = AgentToolDispatcher(repo, vault, phoneController, fakeMcp)
+        lateinit var coordinator: AgentCoordinator
+        val modelSelection = ModelSelectionManager(repo, vault, runtime) { coordinator.invalidateSessionConfig(it) }
+        coordinator = AgentCoordinator(
+            repository = repo,
+            credentialVault = vault,
+            runtime = runtime,
+            phoneController = phoneController,
+            toolDispatcher = dispatcher,
+            mcpClient = fakeMcp,
+            modelSelection = modelSelection,
+            returnNavigator = navigator,
+            chromeHost = chrome,
+            mainDispatcher = Dispatchers.Unconfined,
+        )
+
+        // Start task in Session A
+        val sessionAId = coordinator.activeSessionId.value
+        assertTrue(coordinator.sendUserMessage("帮我订机票").isSuccess)
+        assertEquals(sessionAId, coordinator.runningSessionId.value)
+
+        // Capsule label reflects running session title + target app
+        coordinator.onPhoneOperationStep("日历")
+        assertTrue(chrome.lastOperatingStatusLabel.contains("帮我订机票"))
+        assertTrue(chrome.lastOperatingStatusLabel.contains("日历"))
+
+        // Switch UI to Session B while Session A is still running
+        val sessionB = coordinator.startNewSession()
+        assertEquals(sessionB.id, coordinator.activeSessionId.value)
+        assertEquals(sessionAId, coordinator.runningSessionId.value)
+
+        // Sending in Session B must not accidentally steer Session A
+        assertTrue(coordinator.sendUserMessage("随便聊聊").isFailure)
+        assertTrue(repo.sessions.value.first { it.id == sessionB.id }.messages.isEmpty())
+
+        // Focus helper jumps back to Session A cleanly
+        coordinator.focusRunningSession()
+        assertEquals(sessionAId, coordinator.activeSessionId.value)
+
+        // Switch back to Session B, then tap Stop -> MUST abort Session A, NEVER Session B!
+        coordinator.selectSession(sessionB.id)
+        coordinator.stopActiveRun()
+
+        assertEquals(listOf(sessionAId), runtime.abortedSessionIds)
+        assertFalse(coordinator.isRunning.value)
+        assertEquals(null, coordinator.runningSessionId.value)
+        val sessionAAfter = repo.sessions.value.first { it.id == sessionAId }
+        assertTrue(sessionAAfter.messages.last().text.contains("已停止"))
+        assertTrue(repo.sessions.value.first { it.id == sessionB.id }.messages.isEmpty())
     }
 
     @Test
@@ -283,6 +405,7 @@ class AgentCoordinatorTest {
     }
 
     private class InMemorySessionRepository : SessionRepository {
+        private var counter = 0
         private val _settings = MutableStateFlow(AppSettings())
         override val settings: StateFlow<AppSettings> = _settings
         private val _sessions = MutableStateFlow<List<ChatSession>>(emptyList())
@@ -297,7 +420,7 @@ class AgentCoordinatorTest {
             _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         }
         override fun createNewSession(): ChatSession =
-            ChatSession(id = "s_1", title = "新对话", updatedAtMs = System.currentTimeMillis()).also {
+            ChatSession(id = "s_${++counter}", title = "新对话", updatedAtMs = System.currentTimeMillis()).also {
                 upsertSession(it, true)
             }
         override fun flushNow() {}
@@ -333,6 +456,7 @@ class AgentCoordinatorTest {
         var compactCount = 0
         var lastCompactionMode = ""
         var lastCompactionThreshold = 0
+        val abortedSessionIds = mutableListOf<String>()
 
         fun setProviders(list: List<ProviderStatus>) { _providers.value = list }
         fun emit(ev: PiSessionEvent) { _events.tryEmit(ev) }
@@ -366,7 +490,7 @@ class AgentCoordinatorTest {
         }
         override fun prompt(sessionId: String, text: String) {}
         override fun compactSession(sessionId: String) { compactCount++ }
-        override fun abort(sessionId: String) {}
+        override fun abort(sessionId: String) { abortedSessionIds += sessionId }
         override fun disposeSession(sessionId: String) {}
         override fun lookupModels(ids: List<String>, onResult: (Map<String, Triple<Int, Boolean, Boolean>>) -> Unit) {
             onResult(emptyMap())
@@ -376,11 +500,18 @@ class AgentCoordinatorTest {
     private class FakeChromeHost : RunChromeHost {
         var dismissedCount = 0
         var completedBannerShown = false
+        var lastOperatingStatusLabel = ""
+        var lastCompletedStatusLabel = ""
         var lastFallbackSummary = ""
         var fgsStartCount = 0
         var fgsStopCount = 0
-        override fun showOperatingOverlay(showCapsule: Boolean, showEdgeGlow: Boolean) {}
-        override fun showCompletedBanner() { completedBannerShown = true }
+        override fun showOperatingOverlay(showCapsule: Boolean, showEdgeGlow: Boolean, statusLabel: String) {
+            lastOperatingStatusLabel = statusLabel
+        }
+        override fun showCompletedBanner(statusLabel: String) {
+            completedBannerShown = true
+            lastCompletedStatusLabel = statusLabel
+        }
         override fun dismissOverlay() { dismissedCount++ }
         override fun updateForegroundStatus(status: String) { fgsStartCount++ }
         override fun stopForegroundService() { fgsStopCount++ }

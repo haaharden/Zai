@@ -27,7 +27,11 @@ import com.self.zai.model.MessageRole
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.phone.ZaiAccessibilityService
 import com.self.zai.ui.theme.ZaiTheme
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Translucent bottom-sheet assistant Activity invoked by long-pressing Power 0.5s,
@@ -45,6 +49,7 @@ class ZaiAssistActivity : ComponentActivity() {
     private var lastSpokenMessageId: String? = null
     private var suppressAutoDismissUntilMs: Long = 0L
     private var systemReceiverRegistered: Boolean = false
+    private var unlockRequesterRef: (suspend (String) -> Boolean)? = null
 
     private val systemDismissReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -82,9 +87,18 @@ class ZaiAssistActivity : ComponentActivity() {
         val container = app.container
         val settings = container.sessionRepository.settings.value
 
-        captureScreenIfMissing(app)
-        attachScreenState.value = settings.assistantAttachScreenDefault &&
-            AssistantContextBridge.currentValidScreenContext() != null
+        val unlockHandler: suspend (String) -> Boolean = { reason -> requestUnlockForSensitiveTool(reason) }
+        unlockRequesterRef = unlockHandler
+        AssistantContextBridge.lockscreenUnlockRequester = unlockHandler
+
+        if (isDeviceLocked()) {
+            AssistantContextBridge.clearScreenContext()
+            attachScreenState.value = false
+        } else {
+            captureScreenIfMissing(app)
+            attachScreenState.value = settings.assistantAttachScreenDefault &&
+                AssistantContextBridge.currentValidScreenContext() != null
+        }
         prepareOverlaySession(app)
         AssistantContextBridge.overlayOpenedAtMs = System.currentTimeMillis()
 
@@ -184,7 +198,12 @@ class ZaiAssistActivity : ComponentActivity() {
                     attachScreen = attachScreenState.value,
                     capturedScreen = capturedScreen,
                     onToggleAttachScreen = {
-                        attachScreenState.value = !attachScreenState.value
+                        if (isDeviceLocked()) {
+                            attachScreenState.value = false
+                            Toast.makeText(this@ZaiAssistActivity, "锁屏状态下无法附带屏幕，请先解锁", Toast.LENGTH_SHORT).show()
+                        } else {
+                            attachScreenState.value = !attachScreenState.value
+                        }
                     },
                     overlayMessages = overlayMessages,
                     pendingConfirmation = pendingConfirmation,
@@ -243,7 +262,12 @@ class ZaiAssistActivity : ComponentActivity() {
         val app = application as ZaiApplication
         visibleState.value = true
         AssistantContextBridge.overlayOpenedAtMs = System.currentTimeMillis()
-        captureScreenIfMissing(app)
+        if (isDeviceLocked()) {
+            AssistantContextBridge.clearScreenContext()
+            attachScreenState.value = false
+        } else {
+            captureScreenIfMissing(app)
+        }
         prepareOverlaySession(app)
         invokedAtMs.value = System.currentTimeMillis()
     }
@@ -279,6 +303,10 @@ class ZaiAssistActivity : ComponentActivity() {
     override fun onDestroy() {
         AssistantContextBridge.isOverlayVisible = false
         AssistantContextBridge.clearScreenContext()
+        if (AssistantContextBridge.lockscreenUnlockRequester === unlockRequesterRef) {
+            AssistantContextBridge.lockscreenUnlockRequester = null
+        }
+        unlockRequesterRef = null
         unregisterSystemDismissReceiver()
         speechController?.release()
         speechController = null
@@ -337,12 +365,50 @@ class ZaiAssistActivity : ComponentActivity() {
 
                     override fun onDismissError() {
                         suppressAutoDismissUntilMs = 0L
-                        launchMain()
+                        if (!km.isKeyguardLocked) {
+                            launchMain()
+                        }
                     }
                 },
             )
         } else {
             launchMain()
+        }
+    }
+
+    private fun isDeviceLocked(): Boolean =
+        (getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
+
+    private suspend fun requestUnlockForSensitiveTool(reason: String): Boolean = withContext(Dispatchers.Main) {
+        val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager ?: return@withContext false
+        if (!km.isKeyguardLocked) return@withContext true
+        if (isFinishing || isDestroyed) return@withContext false
+
+        Toast.makeText(this@ZaiAssistActivity, "「$reason」需要先解锁设备", Toast.LENGTH_SHORT).show()
+        val deferred = CompletableDeferred<Boolean>()
+        suppressAutoDismissUntilMs = System.currentTimeMillis() + 30_000L
+        try {
+            km.requestDismissKeyguard(
+                this@ZaiAssistActivity,
+                object : KeyguardManager.KeyguardDismissCallback() {
+                    override fun onDismissSucceeded() {
+                        if (!deferred.isCompleted) deferred.complete(!km.isKeyguardLocked)
+                    }
+
+                    override fun onDismissCancelled() {
+                        if (!deferred.isCompleted) deferred.complete(false)
+                    }
+
+                    override fun onDismissError() {
+                        if (!deferred.isCompleted) deferred.complete(!km.isKeyguardLocked)
+                    }
+                },
+            )
+            withTimeoutOrNull(30_000L) { deferred.await() } ?: false
+        } catch (_: Throwable) {
+            false
+        } finally {
+            suppressAutoDismissUntilMs = 0L
         }
     }
 
@@ -357,7 +423,8 @@ class ZaiAssistActivity : ComponentActivity() {
         }
         var current = coordinator.currentSession()
         val staleMs = System.currentTimeMillis() - current.updatedAtMs
-        if (current.messages.isNotEmpty() && staleMs > FRESH_SESSION_THRESHOLD_MS) {
+        // On lockscreen, always isolate into a fresh session so prior unlocked history is never exposed.
+        if (current.messages.isNotEmpty() && (isDeviceLocked() || staleMs > FRESH_SESSION_THRESHOLD_MS)) {
             current = coordinator.startNewSession()
         }
         overlaySessionId.value = current.id
@@ -365,6 +432,7 @@ class ZaiAssistActivity : ComponentActivity() {
     }
 
     private fun captureScreenIfMissing(app: ZaiApplication) {
+        if (isDeviceLocked()) return
         if (AssistantContextBridge.currentValidScreenContext() != null) return
         val svc = ZaiAccessibilityService.instance ?: return
         val dm = resources.displayMetrics
@@ -395,7 +463,7 @@ class ZaiAssistActivity : ComponentActivity() {
             overlayStartIndex.value = current.messages.size
         }
 
-        val screenContext = if (attachScreenState.value) {
+        val screenContext = if (attachScreenState.value && !isDeviceLocked()) {
             AssistantContextBridge.currentValidScreenContext()?.summary
         } else {
             null

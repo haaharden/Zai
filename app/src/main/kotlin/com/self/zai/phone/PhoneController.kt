@@ -29,7 +29,10 @@ class PhoneController(
     val toolRegistry: PhoneToolRegistry = PhoneToolRegistry.default(),
     private val safetyGuard: SafetyGuard = SafetyGuard(),
     private val onStepProgress: (stepNumber: Int, label: String) -> Unit = { _, _ -> },
+    private val onStepProgressWithApp: ((stepNumber: Int, label: String, targetAppLabel: String) -> Unit)? = null,
     private val onNativeToolActivity: (label: String) -> Unit = {},
+    private val isDeviceLocked: () -> Boolean = { false },
+    private val requestDeviceUnlock: suspend (reason: String) -> Boolean = { false },
 ) : PiToolHandler, PhoneToolContext {
 
     private val stepCount = AtomicInteger(0)
@@ -68,19 +71,84 @@ class PhoneController(
         tool: String,
         args: JSONObject,
     ): BeforeToolVerdict? {
+        val plugin = toolRegistry.get(tool)
+        val humanLabel = toolRegistry.humanLabel(tool, args)
+
+        // Lockscreen privacy & safety gate: require system unlock before personal data or screen operations
+        val requiresUnlock = (plugin?.interactsWithScreen != false) || tool in PRIVATE_LOCKSCREEN_TOOLS
+        if (isDeviceLocked() && requiresUnlock) {
+            val unlocked = runCatching { requestDeviceUnlock(humanLabel) }.getOrDefault(false)
+            if (!unlocked || isDeviceLocked()) {
+                return BeforeToolVerdict(
+                    block = true,
+                    terminate = false,
+                    reason = "设备当前处于锁屏状态，为保护隐私与安全，请先解锁手机后再执行「$humanLabel」。",
+                )
+            }
+        }
+
         val step = stepCount.incrementAndGet()
-        val targetElement = if (args.has("id")) resolveElement(args.optInt("id", -1)) else null
+        val activePackage = channel.currentForegroundPackage()
+        if (tool in TARGET_CHECKED_TOOLS) {
+            refreshSnapshotIfStale(activePackage)
+        }
+        val targetElement = resolveTargetElement(tool, args)
+
         return safetyGuard.evaluate(
             callId = callId,
             toolName = tool,
             args = args,
-            humanLabel = toolRegistry.humanLabel(tool, args),
+            humanLabel = humanLabel,
             stepNumber = step,
             settings = repository.settings.value,
-            activePackage = channel.currentForegroundPackage(),
+            activePackage = activePackage,
             ownPackage = channel.ownPackageName,
             targetElement = targetElement,
+            currentSnapshot = lastSnapshot,
         )
+    }
+
+    private suspend fun refreshSnapshotIfStale(activePackage: String) {
+        val current = lastSnapshot
+        val packageChanged = activePackage.isNotBlank() &&
+            activePackage != channel.ownPackageName &&
+            current?.packageName != activePackage
+        if (current == null || packageChanged) {
+            val (w, h) = channel.screenDimensions()
+            channel.captureTree(w, h)?.let { lastSnapshot = it }
+        }
+    }
+
+    private fun resolveTargetElement(tool: String, args: JSONObject): UiElement? {
+        if (args.has("id")) {
+            return resolveElement(args.optInt("id", -1))
+        }
+        val isCoordTool = tool == "tap_xy" || (tool == "long_press" && args.has("x") && args.has("y"))
+        if (!isCoordTool || !args.has("x") || !args.has("y")) return null
+
+        val snap = lastSnapshot ?: return null
+        val (fallbackW, fallbackH) = channel.screenDimensions()
+        val w = if (snap.screenWidth > 0) snap.screenWidth else fallbackW
+        val h = if (snap.screenHeight > 0) snap.screenHeight else fallbackH
+        if (w <= 0 || h <= 0) return null
+
+        val nx = args.optInt("x", 500).coerceIn(0, 1000)
+        val ny = args.optInt("y", 500).coerceIn(0, 1000)
+        val px = (nx / 1000f * w).toInt().coerceIn(0, w)
+        val py = (ny / 1000f * h).toInt().coerceIn(0, h)
+
+        val hits = snap.elements.filter { el ->
+            val b = el.bounds
+            val bw = b.right - b.left
+            val bh = b.bottom - b.top
+            bw > 0 && bh > 0 && px in b.left..b.right && py in b.top..b.bottom
+        }
+        if (hits.isEmpty()) return null
+        // Prefer password fields or smallest labeled element enclosing (px, py)
+        return hits.firstOrNull { it.isPassword }
+            ?: hits.filter { it.text.isNotBlank() || it.contentDesc.isNotBlank() }
+                .minByOrNull { (it.bounds.right - it.bounds.left).toLong() * (it.bounds.bottom - it.bounds.top).toLong() }
+            ?: hits.minByOrNull { (it.bounds.right - it.bounds.left).toLong() * (it.bounds.bottom - it.bounds.top).toLong() }
     }
 
     override suspend fun executeTool(
@@ -93,11 +161,37 @@ class PhoneController(
             ?: return ToolExecutionResult("未知工具: $tool", isError = true)
         if (plugin.interactsWithScreen) {
             operatedPhoneThisRun = true
-            onStepProgress(stepCount.get().coerceAtLeast(1), plugin.humanLabel(args))
+            val step = stepCount.get().coerceAtLeast(1)
+            val label = plugin.humanLabel(args)
+            val targetAppLabel = resolveCurrentTargetAppLabel(tool, args)
+            onStepProgress(step, label)
+            onStepProgressWithApp?.invoke(step, label, targetAppLabel)
         } else {
             onNativeToolActivity("正在${plugin.humanLabel(args)}…")
         }
         return plugin.execute(this, args)
+    }
+
+    private suspend fun resolveCurrentTargetAppLabel(tool: String, args: JSONObject): String {
+        if (tool == "open_app") {
+            val query = args.optString("app_name").trim()
+            if (query.isNotEmpty()) {
+                return appDirectory.findLaunchableApp(query)?.second ?: query
+            }
+        }
+        val pkg = channel.currentForegroundPackage().ifBlank { lastSnapshot?.packageName.orEmpty() }
+        if (pkg.isBlank() || pkg == channel.ownPackageName) return ""
+        return appDirectory.resolveAppLabel(pkg).takeIf { it.isNotBlank() } ?: pkg.substringAfterLast('.')
+    }
+
+    companion object {
+        private val TARGET_CHECKED_TOOLS = setOf("tap", "tap_xy", "long_press", "input_text")
+        val PRIVATE_LOCKSCREEN_TOOLS = setOf(
+            "read_notifications",
+            "find_contact",
+            "calendar_query",
+            "calendar_create",
+        )
     }
 
     override fun cancelTool(sessionId: String, callId: String) {

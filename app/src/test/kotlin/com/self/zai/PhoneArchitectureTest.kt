@@ -160,6 +160,139 @@ class PhoneArchitectureTest {
         assertNull(guard.pendingConfirmation.value)
     }
 
+    @Test
+    fun phoneController_tapXy_guardsSensitiveBounds_staleRefresh_andSensitiveScreenFallback() = runBlocking {
+        val repo = InMemoryRepo()
+        val guard = SafetyGuard(confirmationTimeoutMs = 5_000L)
+
+        fun rectOf(l: Int, t: Int, r: Int, b: Int) = Rect().apply {
+            left = l; top = t; right = r; bottom = b
+        }
+
+        val payBtn = UiElement(
+            index = 1,
+            text = "确认支付 ¥199",
+            contentDesc = "",
+            viewId = "btn_pay",
+            className = "android.widget.Button",
+            bounds = rectOf(200, 1800, 880, 2000),
+            clickable = true,
+            scrollable = false,
+            editable = false,
+            checked = null,
+            isPassword = false,
+        )
+        var currentPkg = "com.android.settings"
+        var currentElements = emptyList<UiElement>()
+
+        val channel = object : PhoneDeviceChannel {
+            override val ownPackageName = "com.self.zai"
+            override fun screenDimensions() = 1080 to 2400
+            override suspend fun ensureReady() {}
+            override suspend fun captureTree(width: Int, height: Int) = ScreenSnapshot(
+                packageName = currentPkg,
+                screenWidth = width,
+                screenHeight = height,
+                elements = currentElements,
+                source = "fake",
+            )
+            override suspend fun captureBitmap(): Bitmap? = null
+            override suspend fun tap(x: Int, y: Int) = true
+            override suspend fun longPress(x: Int, y: Int, durationMs: Int) = true
+            override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int) = true
+            override suspend fun pressKey(key: String) = true
+            override suspend fun inputText(text: String, targetBounds: Rect?) = true
+            override suspend fun currentForegroundPackage() = currentPkg
+            override suspend fun launchPackage(packageName: String) = true
+        }
+
+        val controller = PhoneController(repo, channel, FakeAppDirectory(), safetyGuard = guard)
+
+        // 1. Benign page coordinate tap passes directly
+        assertNull(controller.beforeTool("s1", "c_safe", "tap_xy", JSONObject().put("x", 500).put("y", 500)))
+
+        // 2. Page transitions to payment screen -> stale snapshot refreshes & tap_xy inside pay button prompts
+        currentPkg = "com.eg.android.AlipayGphone"
+        currentElements = listOf(payBtn)
+
+        val payTapDeferred = async {
+            controller.beforeTool("s1", "c_pay_xy", "tap_xy", JSONObject().put("x", 500).put("y", 790))
+        }
+        repeat(30) {
+            if (guard.pendingConfirmation.value != null) return@repeat
+            delay(10L)
+        }
+        assertEquals("c_pay_xy", guard.pendingConfirmation.value?.callId)
+        assertTrue(guard.pendingConfirmation.value?.title.orEmpty().contains("确认支付"))
+        guard.resolveConfirmation("c_pay_xy", allow = false)
+        val payVerdict = payTapDeferred.await()
+        assertNotNull(payVerdict)
+        assertTrue(payVerdict!!.block)
+
+        // 3. Blind tap_xy outside known bounds on a page containing a sensitive payment button still asks confirmation
+        val blindTapDeferred = async {
+            controller.beforeTool("s1", "c_blind_xy", "tap_xy", JSONObject().put("x", 100).put("y", 100))
+        }
+        repeat(30) {
+            if (guard.pendingConfirmation.value != null) return@repeat
+            delay(10L)
+        }
+        assertEquals("c_blind_xy", guard.pendingConfirmation.value?.callId)
+        guard.resolveConfirmation("c_blind_xy", allow = false)
+        val blindVerdict = blindTapDeferred.await()
+        assertNotNull(blindVerdict)
+        assertTrue(blindVerdict!!.block)
+    }
+
+    @Test
+    fun phoneController_lockscreenGate_blocksPrivateAndScreenToolsUntilUnlocked() = runBlocking {
+        val repo = InMemoryRepo()
+        var locked = true
+        var unlockSucceeds = false
+        val unlockReasons = mutableListOf<String>()
+
+        val controller = PhoneController(
+            repository = repo,
+            channel = FakeDeviceChannel(),
+            appDirectory = FakeAppDirectory(),
+            isDeviceLocked = { locked },
+            requestDeviceUnlock = { reason ->
+                unlockReasons += reason
+                if (unlockSucceeds) {
+                    locked = false
+                    true
+                } else {
+                    false
+                }
+            },
+        )
+
+        // Safe non-private voice utilities work directly while locked
+        assertNull(controller.beforeTool("s1", "c1", "flashlight", JSONObject().put("on", true)))
+        assertNull(controller.beforeTool("s1", "c2", "set_alarm", JSONObject().put("hour", 7).put("minute", 0)))
+        assertNull(controller.beforeTool("s1", "c3", "get_device_status", JSONObject()))
+        assertTrue(unlockReasons.isEmpty())
+
+        // Private native tools & screen operations require unlock and block if user cancels unlock
+        val notifBlocked = controller.beforeTool("s1", "c4", "read_notifications", JSONObject())
+        assertNotNull(notifBlocked)
+        assertTrue(notifBlocked!!.block && !notifBlocked.terminate)
+
+        val contactBlocked = controller.beforeTool("s1", "c5", "find_contact", JSONObject().put("query", "张"))
+        assertNotNull(contactBlocked)
+        assertTrue(contactBlocked!!.block)
+
+        val screenBlocked = controller.beforeTool("s1", "c6", "read_screen", JSONObject())
+        assertNotNull(screenBlocked)
+        assertTrue(screenBlocked!!.block)
+        assertEquals(3, unlockReasons.size)
+
+        // Once unlock succeeds, private tool is allowed
+        unlockSucceeds = true
+        assertNull(controller.beforeTool("s1", "c7", "read_notifications", JSONObject()))
+        assertFalse(locked)
+    }
+
     private class InMemoryRepo : SessionRepository {
         private val _settings = MutableStateFlow(AppSettings())
         override val settings: StateFlow<AppSettings> = _settings

@@ -202,7 +202,9 @@ private fun ZaiRoot(
 
     val settings by repository.settings.collectAsState()
     val sessions by repository.sessions.collectAsState()
+    val storageBytes by repository.storageBytes.collectAsState()
     val activeSessionId by coordinator.activeSessionId.collectAsState()
+    val runningSessionId by coordinator.runningSessionId.collectAsState()
     val providers by runtime.providers.collectAsState()
     val providerQuotas by runtime.providerQuotas.collectAsState()
     val piReady by runtime.isReady.collectAsState()
@@ -258,6 +260,7 @@ private fun ZaiRoot(
         ChatScreen(
             session = activeSession,
             allSessions = sessions,
+            storageBytes = storageBytes,
             providers = providers,
             providerQuotas = providerQuotas,
             enabledSkills = enabledSkills,
@@ -266,6 +269,7 @@ private fun ZaiRoot(
             contextUsage = sessionContextUsages[activeSession.id],
             piReady = piReady,
             isRunning = isRunning,
+            runningSessionId = runningSessionId,
             liveStepLabel = liveStepLabel,
             shizukuStatus = shizukuStatus,
             accessibilityConnected = accessibilityConnected,
@@ -288,6 +292,7 @@ private fun ZaiRoot(
                 }
             },
             onStopRun = { coordinator.stopActiveRun() },
+            onFocusRunningSession = { coordinator.focusRunningSession() },
             onSelectSession = { coordinator.selectSession(it) },
             onNewSession = { coordinator.startNewSession() },
             onDeleteSession = { coordinator.deleteSession(it) },
@@ -350,6 +355,7 @@ private fun ZaiRoot(
                         providerQuotas = providerQuotas,
                         defaultModel = defaultModel,
                         defaultThinkingLevel = defaultThinkingLevel,
+                        piReady = piReady,
                         piVersion = piVersion,
                         hotUpdateTag = hotUpdateTag,
                         latestRelease = latestRelease,
@@ -382,6 +388,15 @@ private fun ZaiRoot(
                         },
                         onReloadPiHotUpdate = { coordinator.reloadPiEngine(resetToBundled = false) },
                         onResetPiHotUpdate = { coordinator.reloadPiEngine(resetToBundled = true) },
+                        onRunSelfCheckPrompt = { prompt ->
+                            route = OverlayRoute.NONE
+                            if (!coordinator.isRunning.value) {
+                                coordinator.startNewSession()
+                            }
+                            coordinator.sendUserMessage(prompt).onFailure { err ->
+                                onShowToast(err.message ?: "无法发起试跑任务")
+                            }
+                        },
                         onBack = { route = OverlayRoute.NONE },
                     )
 

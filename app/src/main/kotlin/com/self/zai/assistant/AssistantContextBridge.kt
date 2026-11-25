@@ -39,6 +39,10 @@ object AssistantContextBridge {
     @Volatile
     var overlayOpenedAtMs: Long = 0L
 
+    /** Active foreground Activity handler able to invoke Android's `KeyguardManager.requestDismissKeyguard`. */
+    @Volatile
+    var lockscreenUnlockRequester: (suspend (reason: String) -> Boolean)? = null
+
     fun shouldToggleDismissOnReinvoke(nowMs: Long = System.currentTimeMillis()): Boolean =
         isOverlayVisible && (nowMs - overlayOpenedAtMs > REVOKE_TOGGLE_DEBOUNCE_MS)
 

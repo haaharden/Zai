@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -93,6 +94,9 @@ class PiEngine(
 
     @Volatile
     private var pendingLoginJob: Job? = null
+
+    @Volatile
+    private var hotBootWatchdogJob: Job? = null
 
     private val nativeHttp = NativeHttp(
         scope = scope,
@@ -319,6 +323,7 @@ class PiEngine(
     @SuppressLint("SetJavaScriptEnabled")
     private fun createAndLoadWebView() {
         val hotDir = File(context.filesDir, AppUpdater.PI_HOT_DIR_NAME).apply { mkdirs() }
+        AppUpdater.recordPiHotBootAttemptOrRollback(context)
         val hotTag = AppUpdater.getActivePiHotTag(context)
         _hotUpdateTag.value = hotTag
 
@@ -349,7 +354,17 @@ class PiEngine(
                     view: WebView,
                     detail: RenderProcessGoneDetail,
                 ): Boolean {
-                    resetRuntimeState(reason = "WebView 渲染进程被系统回收，已自动重建")
+                    val crashedDuringHotBoot = !_isReady.value && _hotUpdateTag.value != null
+                    if (crashedDuringHotBoot) {
+                        AppUpdater.rollbackPiHotUpdate(context)
+                    }
+                    resetRuntimeState(
+                        reason = if (crashedDuringHotBoot) {
+                            "热更新内核启动崩溃，已自动回滚至上一可用版本"
+                        } else {
+                            "WebView 渲染进程被系统回收，已自动重建"
+                        },
+                    )
                     webView = null
                     runCatching { view.destroy() }
                     mainHandler.postDelayed({ createAndLoadWebView() }, 300L)
@@ -374,10 +389,33 @@ class PiEngine(
         } else {
             "https://appassets.androidplatform.net/assets/pi/index.html?v=$bust"
         }
+        startHotBootWatchdogIfNeeded(hotTag)
         wv.loadUrl(entryUrl)
     }
 
+    private fun startHotBootWatchdogIfNeeded(hotTag: String?) {
+        hotBootWatchdogJob?.cancel()
+        hotBootWatchdogJob = null
+        if (hotTag == null) return
+        val bootSignal = readySignal
+        hotBootWatchdogJob = scope.launch {
+            delay(HOT_BOOT_TIMEOUT_MS)
+            if (!bootSignal.isCompleted && _hotUpdateTag.value == hotTag) {
+                AppUpdater.rollbackPiHotUpdate(context)
+                mainHandler.post {
+                    resetRuntimeState(reason = "热更新内核启动超时，已自动回滚")
+                    webView?.let { old -> runCatching { old.destroy() } }
+                    webView = null
+                    _hotUpdateTag.value = AppUpdater.getActivePiHotTag(context)
+                    createAndLoadWebView()
+                }
+            }
+        }
+    }
+
     private fun resetRuntimeState(reason: String) {
+        hotBootWatchdogJob?.cancel()
+        hotBootWatchdogJob = null
         pendingLoginJob?.cancel()
         pendingLoginJob = null
         _isReady.value = false
@@ -406,6 +444,11 @@ class PiEngine(
     private fun handleOrderedEvent(msg: JSONObject) {
         when (msg.optString("type")) {
             "ready" -> {
+                hotBootWatchdogJob?.cancel()
+                hotBootWatchdogJob = null
+                if (_hotUpdateTag.value != null) {
+                    AppUpdater.confirmPiHotBootSuccess(context)
+                }
                 _piVersion.value = msg.optString("pi")
                 val initPayload = JSONObject()
                     .put("deviceId", getStableDeviceId())
@@ -646,6 +689,7 @@ class PiEngine(
 
     companion object {
         private const val KEY_DEVICE_UUID = "zai_device_uuid"
+        private const val HOT_BOOT_TIMEOUT_MS = 12_000L
         private val UUID_REGEX =
             Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
     }

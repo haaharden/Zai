@@ -1,6 +1,7 @@
 package com.self.zai.phone.tools
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
@@ -340,11 +341,17 @@ class AndroidSystemAssistantBackend(
             else -> "已联网"
         }
 
-        val clipPreview = withContext(Dispatchers.Main) {
-            runCatching {
-                val cb = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cb.primaryClip?.getItemAt(0)?.coerceToText(appContext)?.toString()?.trim()?.take(120)
-            }.getOrNull()
+        val isLocked = (appContext.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)
+            ?.isKeyguardLocked == true
+        val clipPreview = if (isLocked) {
+            null
+        } else {
+            withContext(Dispatchers.Main) {
+                runCatching {
+                    val cb = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cb.primaryClip?.getItemAt(0)?.coerceToText(appContext)?.toString()?.trim()?.take(120)
+                }.getOrNull()
+            }
         }
 
         val summary = buildString {

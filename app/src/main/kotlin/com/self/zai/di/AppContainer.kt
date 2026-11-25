@@ -1,5 +1,6 @@
 package com.self.zai.di
 
+import android.app.KeyguardManager
 import android.content.ComponentName
 import android.content.Context
 import com.self.zai.agent.AgentCoordinator
@@ -56,6 +57,7 @@ class AppContainer(context: Context) {
     private val floatingCapsule = FloatingCapsuleController(
         context = appContext,
         onStopRequested = { coordinatorRef?.stopActiveRun() },
+        onOpenRunningSession = { coordinatorRef?.focusRunningSession() },
     )
 
     private val deviceChannel: PhoneDeviceChannel = AndroidCompositeDeviceChannel(
@@ -72,12 +74,12 @@ class AppContainer(context: Context) {
     )
 
     private val chromeHost = object : RunChromeHost {
-        override fun showOperatingOverlay(showCapsule: Boolean, showEdgeGlow: Boolean) {
-            floatingCapsule.show(showCapsule = showCapsule, showEdgeGlow = showEdgeGlow)
+        override fun showOperatingOverlay(showCapsule: Boolean, showEdgeGlow: Boolean, statusLabel: String) {
+            floatingCapsule.show(showCapsule = showCapsule, showEdgeGlow = showEdgeGlow, statusLabel = statusLabel)
         }
 
-        override fun showCompletedBanner() {
-            floatingCapsule.showCompletedBanner()
+        override fun showCompletedBanner(statusLabel: String) {
+            floatingCapsule.showCompletedBanner(statusLabel = statusLabel)
         }
 
         override fun dismissOverlay() {
@@ -97,14 +99,23 @@ class AppContainer(context: Context) {
         }
     }
 
+    private val keyguardManager: KeyguardManager? =
+        appContext.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+
     val phoneController: PhoneController = PhoneController(
         repository = sessionRepository,
         channel = deviceChannel,
         appDirectory = appDirectory,
         toolRegistry = toolRegistry,
         safetyGuard = safetyGuard,
-        onStepProgress = { _, _ -> coordinatorRef?.onPhoneOperationStep() },
+        onStepProgressWithApp = { _, _, targetAppLabel ->
+            coordinatorRef?.onPhoneOperationStep(targetAppLabel)
+        },
         onNativeToolActivity = { label -> coordinatorRef?.onNonPhoneToolActivity(label) },
+        isDeviceLocked = { keyguardManager?.isKeyguardLocked == true },
+        requestDeviceUnlock = { reason ->
+            AssistantContextBridge.lockscreenUnlockRequester?.invoke(reason) ?: false
+        },
     )
 
     val toolDispatcher: AgentToolDispatcher = AgentToolDispatcher(

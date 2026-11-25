@@ -1,5 +1,6 @@
 package com.self.zai.assistant
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -38,7 +39,9 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
         }
         // Always discard any previous app's snapshot before capturing the current foreground screen.
         AssistantContextBridge.clearScreenContext()
-        captureForegroundViaAccessibility()
+        if (!isKeyguardLocked()) {
+            captureForegroundViaAccessibility()
+        }
 
         val intent = Intent(context, ZaiAssistActivity::class.java).apply {
             addFlags(
@@ -57,6 +60,7 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
 
     override fun onHandleAssist(state: AssistState) {
         super.onHandleAssist(state)
+        if (isKeyguardLocked()) return
         // Prefer richer Accessibility tree if already captured, otherwise fill from AssistStructure.
         val existing = AssistantContextBridge.currentValidScreenContext()
         if (existing != null) return
@@ -67,6 +71,9 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
             ?: extracted.appLabel
         AssistantContextBridge.updateScreenContext(extracted.copy(appLabel = resolvedLabel))
     }
+
+    private fun isKeyguardLocked(): Boolean =
+        (context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
 
     private fun captureForegroundViaAccessibility() {
         val svc = ZaiAccessibilityService.instance ?: return

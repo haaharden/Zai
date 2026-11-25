@@ -50,6 +50,7 @@ class SafetyGuard(
         activePackage: String,
         ownPackage: String,
         targetElement: UiElement?,
+        currentSnapshot: ScreenSnapshot? = null,
     ): BeforeToolVerdict? {
         if (stepNumber > settings.maxStepsPerRun) {
             return BeforeToolVerdict(
@@ -70,13 +71,35 @@ class SafetyGuard(
         if (settings.confirmSensitiveActions && toolName in SENSITIVE_CHECKED_TOOLS) {
             val targetLabel = targetElement?.displayLabel.orEmpty()
             val textArg = args.optString("text")
-            val sensitiveHit = SENSITIVE_KEYWORDS.firstOrNull { kw ->
-                targetLabel.contains(kw, ignoreCase = true) || textArg.contains(kw, ignoreCase = true)
-            }
+            val sensitiveHit = findSensitiveKeyword(targetLabel, textArg)
             val isPasswordField = targetElement?.isPassword == true
-            if (sensitiveHit != null || isPasswordField) {
-                val title = if (isPasswordField) "涉及密码输入，需要你确认" else "检测到敏感操作「$sensitiveHit」"
-                val detail = humanLabel + if (targetLabel.isNotBlank()) "（目标：$targetLabel）" else ""
+            val isCoordinateAction = toolName == "tap_xy" || (toolName == "long_press" && !args.has("id"))
+            val targetHasExplicitLabel = targetElement != null &&
+                (targetElement.text.isNotBlank() || targetElement.contentDesc.isNotBlank())
+
+            val screenFallbackReason = if (
+                sensitiveHit == null &&
+                !isPasswordField &&
+                isCoordinateAction &&
+                !targetHasExplicitLabel
+            ) {
+                findSensitiveScreenContext(currentSnapshot)
+            } else {
+                null
+            }
+
+            if (sensitiveHit != null || isPasswordField || screenFallbackReason != null) {
+                val title = when {
+                    isPasswordField -> "涉及密码输入，需要你确认"
+                    sensitiveHit != null -> "检测到敏感操作「$sensitiveHit」"
+                    else -> "敏感页面坐标点击，需要你确认"
+                }
+                val detail = when {
+                    sensitiveHit != null || isPasswordField ->
+                        humanLabel + if (targetLabel.isNotBlank()) "（目标：$targetLabel）" else ""
+                    else ->
+                        "$humanLabel（当前页面包含「$screenFallbackReason」，坐标目标无法可靠识别，请核对画面后确认）"
+                }
                 val allowed = askUserConfirmation(callId, title, detail)
                 if (!allowed) {
                     return BeforeToolVerdict(
@@ -86,6 +109,21 @@ class SafetyGuard(
                     )
                 }
             }
+        }
+        return null
+    }
+
+    private fun findSensitiveKeyword(vararg candidates: String): String? =
+        SENSITIVE_KEYWORDS.firstOrNull { kw ->
+            candidates.any { it.contains(kw, ignoreCase = true) }
+        }
+
+    private fun findSensitiveScreenContext(snapshot: ScreenSnapshot?): String? {
+        if (snapshot == null) return null
+        if (snapshot.elements.any { it.isPassword }) return "密码输入区"
+        for (el in snapshot.elements) {
+            val hit = findSensitiveKeyword(el.text, el.contentDesc, el.displayLabel)
+            if (hit != null) return hit
         }
         return null
     }
@@ -104,11 +142,11 @@ class SafetyGuard(
 
     companion object {
         private val SELF_GUARDED_TOOLS = setOf("tap", "tap_xy", "long_press", "swipe", "input_text")
-        private val SENSITIVE_CHECKED_TOOLS = setOf("tap", "input_text", "long_press")
+        private val SENSITIVE_CHECKED_TOOLS = setOf("tap", "tap_xy", "input_text", "long_press")
 
         private val SENSITIVE_KEYWORDS = listOf(
-            "确认支付", "立即支付", "付款", "转账", "确认转账", "支付密码",
-            "卸载", "删除账号", "清除数据", "格式化", "pay now", "confirm payment",
+            "确认支付", "立即支付", "付款", "转账", "确认转账", "支付密码", "输入密码",
+            "卸载", "删除账号", "注销账号", "清除数据", "格式化", "pay now", "confirm payment",
         )
     }
 }

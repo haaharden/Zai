@@ -19,11 +19,12 @@ import java.io.File
 import java.util.UUID
 
 /**
- * Thread-safe JSON store for [AppSettings] and [ChatSession] history.
+ * Thread-safe JSON store for [AppSettings] and unlimited [ChatSession] history.
  *
- * - State updates are applied atomically in memory so Compose UI remains instant.
- * - High-frequency session mutations (e.g. streaming text deltas) are debounced and flushed on [ioDispatcher]
- *   rather than blocking the main thread on every token.
+ * - Each conversation is persisted independently under `zai_sessions/<id>.json` (+ `.bak`) so there is
+ *   no hard session-count eviction cap and streaming writes only touch the active session file.
+ * - Legacy single-file `zai_sessions.json` installs are migrated transparently on startup.
+ * - High-frequency session mutations (e.g. streaming text deltas) are debounced and flushed on [ioDispatcher].
  * - Writes use temp-file + backup rotation so an unexpected process kill never corrupts user history.
  */
 class SettingsStore(
@@ -46,14 +47,18 @@ class SettingsStore(
 
     private val settingsFile = File(baseDir, "zai_settings.json")
     private val settingsBackupFile = File(baseDir, "zai_settings.json.bak")
-    private val sessionsFile = File(baseDir, "zai_sessions.json")
-    private val sessionsBackupFile = File(baseDir, "zai_sessions.json.bak")
+    private val legacySessionsFile = File(baseDir, "zai_sessions.json")
+    private val legacySessionsBackupFile = File(baseDir, "zai_sessions.json.bak")
+    private val sessionsDir = File(baseDir, "zai_sessions")
 
     private val _settings = MutableStateFlow(loadSettings())
     override val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
-    private val _sessions = MutableStateFlow(loadSessions())
+    private val _sessions = MutableStateFlow(loadSessionsAndMigrateIfNeeded())
     override val sessions: StateFlow<List<ChatSession>> = _sessions.asStateFlow()
+
+    private val _storageBytes = MutableStateFlow(computeSessionsStorageBytes())
+    override val storageBytes: StateFlow<Long> = _storageBytes.asStateFlow()
 
     @Volatile
     private var pendingSessionsFlushJob: Job? = null
@@ -61,8 +66,8 @@ class SettingsStore(
     @Volatile
     private var settingsDirty: Boolean = false
 
-    @Volatile
-    private var sessionsDirty: Boolean = false
+    private val dirtySessionIds = LinkedHashSet<String>()
+    private val deletedSessionIds = LinkedHashSet<String>()
 
     override fun updateSettings(transform: (AppSettings) -> AppSettings): AppSettings {
         val next = synchronized(stateLock) {
@@ -80,14 +85,14 @@ class SettingsStore(
             val current = _sessions.value.toMutableList()
             val idx = current.indexOfFirst { it.id == session.id }
             if (idx >= 0) current[idx] = session else current.add(0, session)
-            val result = current.sortedByDescending { it.updatedAtMs }.take(MAX_STORED_SESSIONS)
-            _sessions.value = result
-            sessionsDirty = true
+            _sessions.value = current.sortedByDescending { it.updatedAtMs }
+            dirtySessionIds.add(session.id)
+            deletedSessionIds.remove(session.id)
         }
         if (flushImmediately) {
             pendingSessionsFlushJob?.cancel()
             pendingSessionsFlushJob = null
-            ioScope.launch { writeLatestSessionsAtomic() }
+            ioScope.launch { writeDirtySessionsAtomic() }
         } else {
             scheduleSessionsFlush()
         }
@@ -97,11 +102,12 @@ class SettingsStore(
         synchronized(stateLock) {
             val filtered = _sessions.value.filterNot { it.id == sessionId }
             _sessions.value = filtered
-            sessionsDirty = true
+            dirtySessionIds.remove(sessionId)
+            deletedSessionIds.add(sessionId)
         }
         pendingSessionsFlushJob?.cancel()
         pendingSessionsFlushJob = null
-        ioScope.launch { writeLatestSessionsAtomic() }
+        ioScope.launch { writeDirtySessionsAtomic() }
     }
 
     override fun createNewSession(): ChatSession {
@@ -115,18 +121,20 @@ class SettingsStore(
     }
 
     override fun flushNow() {
-        val needsFlush = synchronized(stateLock) { sessionsDirty }
+        val needsFlush = synchronized(stateLock) {
+            dirtySessionIds.isNotEmpty() || deletedSessionIds.isNotEmpty()
+        }
         if (!needsFlush) return
         pendingSessionsFlushJob?.cancel()
         pendingSessionsFlushJob = null
-        ioScope.launch { writeLatestSessionsAtomic() }
+        ioScope.launch { writeDirtySessionsAtomic() }
     }
 
     private fun scheduleSessionsFlush() {
         pendingSessionsFlushJob?.cancel()
         pendingSessionsFlushJob = ioScope.launch {
             delay(sessionDebounceMs)
-            writeLatestSessionsAtomic()
+            writeDirtySessionsAtomic()
         }
     }
 
@@ -135,10 +143,56 @@ class SettingsStore(
             json.decodeFromString<AppSettings>(raw)
         } ?: AppSettings()
 
-    private fun loadSessions(): List<ChatSession> =
-        readWithBackupFallback(sessionsFile, sessionsBackupFile) { raw ->
-            json.decodeFromString<List<ChatSession>>(raw)
-        } ?: emptyList()
+    private fun loadSessionsAndMigrateIfNeeded(): List<ChatSession> {
+        val byId = LinkedHashMap<String, ChatSession>()
+
+        // 1. Load per-session files from zai_sessions/
+        if (sessionsDir.exists() && sessionsDir.isDirectory) {
+            val keys = LinkedHashSet<String>()
+            sessionsDir.listFiles().orEmpty().forEach { f ->
+                val name = f.name
+                when {
+                    name.endsWith(".json") -> keys.add(name.removeSuffix(".json"))
+                    name.endsWith(".json.bak") -> keys.add(name.removeSuffix(".json.bak"))
+                }
+            }
+            for (key in keys) {
+                val primary = File(sessionsDir, "$key.json")
+                val backup = File(sessionsDir, "$key.json.bak")
+                val decoded = readWithBackupFallback(primary, backup) { raw ->
+                    json.decodeFromString<ChatSession>(raw)
+                }
+                if (decoded != null) {
+                    byId[decoded.id] = decoded
+                }
+            }
+        }
+
+        // 2. Transparently migrate any legacy monolithic zai_sessions.json (and .bak)
+        if (legacySessionsFile.exists() || legacySessionsBackupFile.exists()) {
+            val legacy = readWithBackupFallback(legacySessionsFile, legacySessionsBackupFile) { raw ->
+                json.decodeFromString<List<ChatSession>>(raw)
+            }.orEmpty()
+            var allMigrated = true
+            for (s in legacy) {
+                if (s.id !in byId) {
+                    byId[s.id] = s
+                    val ok = writeAtomicUnlocked(
+                        sessionFile(s.id),
+                        sessionBackupFile(s.id),
+                        json.encodeToString(s),
+                    )
+                    if (!ok) allMigrated = false
+                }
+            }
+            if (allMigrated && legacy.isNotEmpty()) {
+                runCatching { legacySessionsFile.delete() }
+                runCatching { legacySessionsBackupFile.delete() }
+            }
+        }
+
+        return byId.values.sortedByDescending { it.updatedAtMs }
+    }
 
     private fun writeLatestSettingsAtomic() {
         synchronized(fileWriteLock) {
@@ -152,17 +206,59 @@ class SettingsStore(
         }
     }
 
-    private fun writeLatestSessionsAtomic() {
+    private fun writeDirtySessionsAtomic() {
         synchronized(fileWriteLock) {
-            val snapshot = synchronized(stateLock) {
-                if (!sessionsDirty) return
-                sessionsDirty = false
-                _sessions.value
+            val toWrite: List<ChatSession>
+            val toDelete: List<String>
+            synchronized(stateLock) {
+                if (dirtySessionIds.isEmpty() && deletedSessionIds.isEmpty()) return
+                val byId = _sessions.value.associateBy { it.id }
+                toWrite = dirtySessionIds.mapNotNull { byId[it] }
+                toDelete = deletedSessionIds.toList()
+                dirtySessionIds.clear()
+                deletedSessionIds.clear()
             }
-            val ok = writeAtomicUnlocked(sessionsFile, sessionsBackupFile, json.encodeToString(snapshot))
-            if (!ok) synchronized(stateLock) { sessionsDirty = true }
+
+            val failedWrites = mutableListOf<String>()
+            for (session in toWrite) {
+                val ok = writeAtomicUnlocked(
+                    sessionFile(session.id),
+                    sessionBackupFile(session.id),
+                    json.encodeToString(session),
+                )
+                if (!ok) failedWrites.add(session.id)
+            }
+            for (deletedId in toDelete) {
+                runCatching { sessionFile(deletedId).delete() }
+                runCatching { sessionBackupFile(deletedId).delete() }
+                runCatching { File(sessionsDir, "${safeSessionKey(deletedId)}.json.tmp").delete() }
+            }
+
+            if (failedWrites.isNotEmpty()) {
+                synchronized(stateLock) {
+                    dirtySessionIds.addAll(failedWrites)
+                }
+            }
+            _storageBytes.value = computeSessionsStorageBytes()
         }
     }
+
+    private fun computeSessionsStorageBytes(): Long {
+        val dir = sessionsDir
+        if (!dir.exists() || !dir.isDirectory) return 0L
+        return dir.listFiles().orEmpty()
+            .filter { it.isFile && it.name.endsWith(".json") }
+            .sumOf { it.length() }
+    }
+
+    private fun sessionFile(sessionId: String): File =
+        File(sessionsDir, "${safeSessionKey(sessionId)}.json")
+
+    private fun sessionBackupFile(sessionId: String): File =
+        File(sessionsDir, "${safeSessionKey(sessionId)}.json.bak")
+
+    private fun safeSessionKey(sessionId: String): String =
+        sessionId.replace(SAFE_ID_REGEX, "_").ifBlank { "session" }
 
     private fun <T> readWithBackupFallback(primary: File, backup: File, decode: (String) -> T): T? {
         for (candidate in listOf(primary, backup)) {
@@ -192,6 +288,6 @@ class SettingsStore(
         }.getOrDefault(false)
 
     companion object {
-        private const val MAX_STORED_SESSIONS = 40
+        private val SAFE_ID_REGEX = Regex("[^a-zA-Z0-9._-]")
     }
 }
