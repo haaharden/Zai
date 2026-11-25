@@ -179,9 +179,40 @@ class PhoneController(
                 return appDirectory.findLaunchableApp(query)?.second ?: query
             }
         }
+        if (tool == "open_system_setting") return "系统设置"
         val pkg = channel.currentForegroundPackage().ifBlank { lastSnapshot?.packageName.orEmpty() }
         if (pkg.isBlank() || pkg == channel.ownPackageName) return ""
         return appDirectory.resolveAppLabel(pkg).takeIf { it.isNotBlank() } ?: pkg.substringAfterLast('.')
+    }
+
+    override suspend fun refreshTreeSnapshot(): ScreenSnapshot? {
+        channel.ensureReady()
+        val (w, h) = channel.screenDimensions()
+        val snap = channel.captureTree(w, h) ?: return null
+        lastSnapshot = snap
+        return snap
+    }
+
+    override suspend fun checkSubActionSafety(
+        callId: String,
+        toolName: String,
+        args: JSONObject,
+        humanLabel: String,
+        targetElement: UiElement?,
+    ): BeforeToolVerdict? {
+        val activePackage = channel.currentForegroundPackage()
+        return safetyGuard.evaluate(
+            callId = callId,
+            toolName = toolName,
+            args = args,
+            humanLabel = humanLabel,
+            stepNumber = stepCount.get().coerceAtLeast(1),
+            settings = repository.settings.value,
+            activePackage = activePackage,
+            ownPackage = channel.ownPackageName,
+            targetElement = targetElement,
+            currentSnapshot = lastSnapshot,
+        )
     }
 
     companion object {

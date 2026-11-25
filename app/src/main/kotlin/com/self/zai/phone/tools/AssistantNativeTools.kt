@@ -13,15 +13,18 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.BatteryManager
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.ContactsContract
+import android.provider.Settings
 import android.view.KeyEvent
 import androidx.core.content.ContextCompat
 import com.self.zai.assistant.ZaiNotificationListenerService
 import com.self.zai.phone.AppDirectory
 import com.self.zai.pi.ToolExecutionResult
+import com.self.zai.shell.ShizukuBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -52,6 +55,10 @@ interface SystemAssistantBackend {
     suspend fun controlMedia(action: String): ToolExecutionResult
     suspend fun findContacts(query: String): ToolExecutionResult
     suspend fun readNotifications(query: String?, limit: Int): ToolExecutionResult
+    suspend fun openSystemSetting(target: String, state: String? = null): ToolExecutionResult =
+        ToolExecutionResult("当前运行环境不支持系统设置直达 ($target)。", isError = true)
+    suspend fun openUri(uri: String, packageName: String? = null): ToolExecutionResult =
+        ToolExecutionResult("当前运行环境不支持直接打开链接 ($uri)。", isError = true)
 }
 
 object UnavailableSystemAssistantBackend : SystemAssistantBackend {
@@ -85,6 +92,8 @@ fun assistantNativeTools(backend: SystemAssistantBackend): List<PhoneTool> = lis
     MediaControlTool(backend),
     FindContactTool(backend),
     ReadNotificationsTool(backend),
+    OpenSystemSettingTool(backend),
+    OpenUriTool(backend),
 )
 
 private class GetDeviceStatusTool(private val backend: SystemAssistantBackend) : PhoneTool {
@@ -299,12 +308,148 @@ private class ReadNotificationsTool(private val backend: SystemAssistantBackend)
     }
 }
 
+private class OpenSystemSettingTool(private val backend: SystemAssistantBackend) : PhoneTool {
+    override val name = "open_system_setting"
+    override val label = "直达系统设置"
+    override val description = "一步直达 Android 指定系统设置页面（无需先打开设置再层层查找）：支持 wifi、bluetooth、display、sound、battery、storage、location、apps、notifications、accessibility、security、date、language、network、airplane、developer、about、main。对 wifi/bluetooth 传 state='on'/'off' 时，若 Shizuku 可用会直接免界面毫秒级切换，否则直达对应设置页。"
+    override val interactsWithScreen = true
+    override val requiredParams = listOf("target")
+
+    override fun parametersSchema(): JSONObject = JSONObject()
+        .put(
+            "target",
+            JSONObject()
+                .put("type", "string")
+                .put(
+                    "enum",
+                    JSONArray(
+                        listOf(
+                            "wifi", "bluetooth", "display", "sound", "battery", "storage",
+                            "location", "apps", "notifications", "accessibility", "security",
+                            "date", "language", "network", "airplane", "developer", "about", "main",
+                        ),
+                    ),
+                )
+                .put("description", "目标系统设置页面"),
+        )
+        .put(
+            "state",
+            JSONObject()
+                .put("type", "string")
+                .put("enum", JSONArray(listOf("on", "off")))
+                .put("description", "可选：仅 wifi/bluetooth 支持，请求直接开关"),
+        )
+
+    override fun humanLabel(args: JSONObject): String {
+        val target = args.optString("target", "main")
+        val state = args.optString("state").trim().lowercase()
+        val label = SETTING_LABELS[target] ?: target
+        return when (state) {
+            "on" -> "开启 $label"
+            "off" -> "关闭 $label"
+            else -> "直达$label 设置"
+        }
+    }
+
+    override suspend fun execute(ctx: PhoneToolContext, args: JSONObject): ToolExecutionResult {
+        val target = args.optString("target").trim().lowercase()
+        if (target.isEmpty()) return ToolExecutionResult("请指定 target 系统设置项。", isError = true)
+        val state = args.optString("state").trim().lowercase().takeIf { it == "on" || it == "off" }
+        val prevPkg = ctx.channel.currentForegroundPackage()
+        val res = backend.openSystemSetting(target, state)
+        if (res.isError) return res
+        // If Shizuku toggled directly without opening UI, return immediately with zero UI wait
+        if (res.text.startsWith("DIRECT_DONE:")) {
+            return ToolExecutionResult(res.text.removePrefix("DIRECT_DONE:").trim())
+        }
+        ctx.channel.waitForUiStable(
+            minWaitMs = 180L,
+            quietWindowMs = 160L,
+            maxWaitMs = 1_400L,
+            waitForPackageChangeFrom = prevPkg.takeIf { it.isNotBlank() && it != "com.android.settings" },
+        )
+        return ctx.observeScreen(prefix = res.text)
+    }
+
+    companion object {
+        private val SETTING_LABELS = mapOf(
+            "wifi" to "Wi-Fi",
+            "bluetooth" to "蓝牙",
+            "display" to "显示与亮度",
+            "sound" to "声音与振动",
+            "battery" to "电池",
+            "storage" to "存储空间",
+            "location" to "定位服务",
+            "apps" to "应用管理",
+            "notifications" to "通知管理",
+            "accessibility" to "无障碍",
+            "security" to "安全与隐私",
+            "date" to "日期与时间",
+            "language" to "语言与输入法",
+            "network" to "移动网络",
+            "airplane" to "飞行模式",
+            "developer" to "开发者选项",
+            "about" to "关于手机",
+            "main" to "系统设置",
+        )
+    }
+}
+
+private class OpenUriTool(private val backend: SystemAssistantBackend) : PhoneTool {
+    override val name = "open_uri"
+    override val label = "直达链接或应用页"
+    override val description = "通过公开 URI / DeepLink 一步打开网页、地图地点搜索（如 geo:0,0?q=故宫、androidamap://poi?sourceApplication=Zai&keywords=咖啡）、拨号/邮件或 App 深链，省去多次界面跳转。"
+    override val interactsWithScreen = true
+    override val requiredParams = listOf("uri")
+
+    override fun parametersSchema(): JSONObject = JSONObject()
+        .put("uri", JSONObject().put("type", "string").put("description", "目标 URI 或 DeepLink"))
+        .put("package_name", JSONObject().put("type", "string").put("description", "可选：限定处理该链接的应用包名"))
+
+    override fun humanLabel(args: JSONObject): String = "打开链接 ${args.optString("uri").take(22)}"
+
+    override suspend fun execute(ctx: PhoneToolContext, args: JSONObject): ToolExecutionResult {
+        val rawUri = args.optString("uri").trim()
+        if (rawUri.isEmpty()) return ToolExecutionResult("请提供要打开的 uri。", isError = true)
+        val scheme = rawUri.substringBefore(':', missingDelimiterValue = "").lowercase()
+        if (scheme.isEmpty() || scheme in BLOCKED_SCHEMES || scheme !in ALLOWED_SCHEMES) {
+            return ToolExecutionResult(
+                "不支持或不安全的 URI 协议「$scheme」，仅允许 https/http/geo/tel/mailto/sms 及常见 App 公开 DeepLink。",
+                isError = true,
+            )
+        }
+        val pkg = args.optString("package_name").trim().ifEmpty { null }
+        val prevPkg = ctx.channel.currentForegroundPackage()
+        val res = backend.openUri(rawUri, pkg)
+        if (res.isError) return res
+        ctx.channel.waitForUiStable(
+            minWaitMs = 220L,
+            quietWindowMs = 180L,
+            maxWaitMs = 1_800L,
+            waitForPackageChangeFrom = prevPkg.takeIf { it.isNotBlank() && it != pkg },
+        )
+        return ctx.observeScreen(prefix = res.text)
+    }
+
+    companion object {
+        private val BLOCKED_SCHEMES = setOf("file", "content", "javascript", "intent", "data", "android-app")
+        private val ALLOWED_SCHEMES = setOf(
+            "https", "http", "geo", "tel", "mailto", "sms", "smsto",
+            "androidamap", "amapuri", "baidumap", "qqmap",
+            "bilibili", "zhihu", "xhsdiscover", "snssdk1128",
+            "tbopen", "openapp.jdmobile", "dianping", "imeituan", "ctrip",
+            "weixin", "alipays",
+        )
+    }
+}
+
 /**
  * Live Android implementation of [SystemAssistantBackend] using native OS providers and services.
  */
 class AndroidSystemAssistantBackend(
     context: Context,
     private val appDirectory: AppDirectory,
+    private val shizuku: ShizukuBridge? = null,
 ) : SystemAssistantBackend {
 
     private val appContext = context.applicationContext
@@ -645,6 +790,74 @@ class AndroidSystemAssistantBackend(
                 item.formatLine(appLabel)
             }
             ToolExecutionResult("当前共 ${filtered.size} 条通知：\n$lines")
+        }
+    }
+
+    override suspend fun openSystemSetting(target: String, state: String?): ToolExecutionResult {
+        // Optional Shizuku instant toggle for Wi-Fi / Bluetooth without opening UI at all
+        if (state != null && shizuku != null && shizuku.status.value.isReady) {
+            val cmd = when (target) {
+                "wifi" -> if (state == "on") "svc wifi enable" else "svc wifi disable"
+                "bluetooth" -> if (state == "on") "svc bluetooth enable" else "svc bluetooth disable"
+                else -> null
+            }
+            if (cmd != null) {
+                val execRes = shizuku.exec(cmd, timeoutMs = 4_000)
+                if (execRes.isSuccess) {
+                    val name = if (target == "wifi") "Wi-Fi" else "蓝牙"
+                    val action = if (state == "on") "开启" else "关闭"
+                    return ToolExecutionResult("DIRECT_DONE:已通过 Shizuku 直接${action}${name}。")
+                }
+            }
+        }
+
+        val action = when (target) {
+            "wifi" -> Settings.ACTION_WIFI_SETTINGS
+            "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
+            "display" -> Settings.ACTION_DISPLAY_SETTINGS
+            "sound" -> Settings.ACTION_SOUND_SETTINGS
+            "battery" -> Intent.ACTION_POWER_USAGE_SUMMARY
+            "storage" -> Settings.ACTION_INTERNAL_STORAGE_SETTINGS
+            "location" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
+            "apps" -> Settings.ACTION_APPLICATION_SETTINGS
+            "notifications" -> Settings.ACTION_ALL_APPS_NOTIFICATION_SETTINGS
+            "accessibility" -> Settings.ACTION_ACCESSIBILITY_SETTINGS
+            "security" -> Settings.ACTION_SECURITY_SETTINGS
+            "date" -> Settings.ACTION_DATE_SETTINGS
+            "language" -> Settings.ACTION_LOCALE_SETTINGS
+            "network" -> Settings.ACTION_WIRELESS_SETTINGS
+            "airplane" -> Settings.ACTION_AIRPLANE_MODE_SETTINGS
+            "developer" -> Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS
+            "about" -> Settings.ACTION_DEVICE_INFO_SETTINGS
+            else -> Settings.ACTION_SETTINGS
+        }
+
+        return withContext(Dispatchers.Main) {
+            val intent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            runCatching {
+                appContext.startActivity(intent)
+                ToolExecutionResult("已直达系统设置页 ($target)")
+            }.getOrElse {
+                runCatching {
+                    appContext.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    ToolExecutionResult("已打开系统设置首页（设备不支持直达 $target 子页）")
+                }.getOrElse { err ->
+                    ToolExecutionResult("打开系统设置失败：${err.message}", isError = true)
+                }
+            }
+        }
+    }
+
+    override suspend fun openUri(uri: String, packageName: String?): ToolExecutionResult = withContext(Dispatchers.Main) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (!packageName.isNullOrBlank()) setPackage(packageName)
+        }
+        runCatching {
+            appContext.startActivity(intent)
+            ToolExecutionResult("已通过 URI 打开：$uri")
+        }.getOrElse { err ->
+            ToolExecutionResult("无法打开链接「$uri」：未安装对应应用或链接无效（${err.message}）。", isError = true)
         }
     }
 

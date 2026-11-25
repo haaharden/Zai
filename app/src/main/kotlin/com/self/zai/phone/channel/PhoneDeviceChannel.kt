@@ -34,12 +34,21 @@ interface PhoneDeviceChannel {
     suspend fun captureTree(width: Int, height: Int): ScreenSnapshot?
     suspend fun captureBitmap(): Bitmap?
     suspend fun tap(x: Int, y: Int): Boolean
+    suspend fun tapNode(bounds: Rect, centerX: Int, centerY: Int): Boolean = tap(centerX, centerY)
     suspend fun longPress(x: Int, y: Int, durationMs: Int): Boolean
     suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean
     suspend fun pressKey(key: String): Boolean
     suspend fun inputText(text: String, targetBounds: Rect?): Boolean
     suspend fun currentForegroundPackage(): String
     suspend fun launchPackage(packageName: String): Boolean
+    suspend fun waitForUiStable(
+        minWaitMs: Long = 120L,
+        quietWindowMs: Long = 160L,
+        maxWaitMs: Long = 850L,
+        waitForPackageChangeFrom: String? = null,
+    ) {
+        // Lightweight default for JVM unit tests and non-event channels
+    }
 }
 
 /**
@@ -98,7 +107,7 @@ class AndroidCompositeDeviceChannel(
 
     override suspend fun captureBitmap(): Bitmap? {
         onHideOverlayForCapture(true)
-        delay(90L)
+        delay(55L)
         return try {
             if (shouldUseShizuku()) {
                 val capFile = File(context.externalCacheDir ?: context.cacheDir, "zai_cap.png")
@@ -119,6 +128,36 @@ class AndroidCompositeDeviceChannel(
         onTapVisualMarker(x, y)
         if (shouldUseShizuku() && shizuku.tap(x, y).isSuccess) return true
         return ZaiAccessibilityService.instance?.performTap(x, y) == true
+    }
+
+    override suspend fun tapNode(bounds: Rect, centerX: Int, centerY: Int): Boolean {
+        onTapVisualMarker(centerX, centerY)
+        if (!shouldUseShizuku()) {
+            if (ZaiAccessibilityService.instance?.clickAtBounds(bounds) == true) return true
+            return ZaiAccessibilityService.instance?.performTap(centerX, centerY) == true
+        }
+        if (shizuku.tap(centerX, centerY).isSuccess) return true
+        if (ZaiAccessibilityService.instance?.clickAtBounds(bounds) == true) return true
+        return ZaiAccessibilityService.instance?.performTap(centerX, centerY) == true
+    }
+
+    override suspend fun waitForUiStable(
+        minWaitMs: Long,
+        quietWindowMs: Long,
+        maxWaitMs: Long,
+        waitForPackageChangeFrom: String?,
+    ) {
+        val svc = ZaiAccessibilityService.instance
+        if (svc != null) {
+            svc.waitForUiSettle(
+                minWaitMs = minWaitMs,
+                quietWindowMs = quietWindowMs,
+                maxWaitMs = maxWaitMs,
+                waitForPackageChangeFrom = waitForPackageChangeFrom,
+            )
+        } else {
+            delay((minWaitMs + quietWindowMs).coerceAtMost(maxWaitMs))
+        }
     }
 
     override suspend fun longPress(x: Int, y: Int, durationMs: Int): Boolean {

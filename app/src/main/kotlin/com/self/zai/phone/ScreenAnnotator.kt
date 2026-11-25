@@ -23,8 +23,8 @@ object ScreenAnnotator {
     fun annotateAndEncodeJpeg(
         source: Bitmap,
         elements: List<UiElement>,
-        maxLongEdge: Int = 1080,
-        jpegQuality: Int = 74,
+        maxLongEdge: Int = 840,
+        jpegQuality: Int = 62,
     ): String {
         val origW = source.width
         val origH = source.height

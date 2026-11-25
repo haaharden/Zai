@@ -71,7 +71,10 @@ class SafetyGuard(
         if (settings.confirmSensitiveActions && toolName in SENSITIVE_CHECKED_TOOLS) {
             val targetLabel = targetElement?.displayLabel.orEmpty()
             val textArg = args.optString("text")
-            val sensitiveHit = findSensitiveKeyword(targetLabel, textArg)
+            val queryArg = args.optString("query")
+            val uriArg = args.optString("uri")
+            val sensitiveHit = findSensitiveKeyword(targetLabel, textArg, queryArg)
+                ?: if (toolName == "open_uri") findSensitiveUriReason(uriArg) else null
             val isPasswordField = targetElement?.isPassword == true
             val isCoordinateAction = toolName == "tap_xy" || (toolName == "long_press" && !args.has("id"))
             val targetHasExplicitLabel = targetElement != null &&
@@ -118,6 +121,18 @@ class SafetyGuard(
             candidates.any { it.contains(kw, ignoreCase = true) }
         }
 
+    private fun findSensitiveUriReason(uri: String): String? {
+        if (uri.isBlank()) return null
+        val lower = uri.trim().lowercase()
+        return when {
+            lower.startsWith("tel:") -> "拨打电话"
+            lower.startsWith("sms:") || lower.startsWith("smsto:") -> "发送短信"
+            lower.startsWith("alipays://") || lower.contains("wxpay") ||
+                lower.contains("pay?") || lower.contains("/pay") || lower.contains("transfer") -> "支付或转账链接"
+            else -> null
+        }
+    }
+
     private fun findSensitiveScreenContext(snapshot: ScreenSnapshot?): String? {
         if (snapshot == null) return null
         if (snapshot.elements.any { it.isPassword }) return "密码输入区"
@@ -141,8 +156,8 @@ class SafetyGuard(
     }
 
     companion object {
-        private val SELF_GUARDED_TOOLS = setOf("tap", "tap_xy", "long_press", "swipe", "input_text")
-        private val SENSITIVE_CHECKED_TOOLS = setOf("tap", "tap_xy", "input_text", "long_press")
+        private val SELF_GUARDED_TOOLS = setOf("tap", "tap_xy", "long_press", "swipe", "input_text", "scroll_find_tap", "run_actions")
+        private val SENSITIVE_CHECKED_TOOLS = setOf("tap", "tap_xy", "input_text", "long_press", "scroll_find_tap", "open_uri")
 
         private val SENSITIVE_KEYWORDS = listOf(
             "确认支付", "立即支付", "付款", "转账", "确认转账", "支付密码", "输入密码",

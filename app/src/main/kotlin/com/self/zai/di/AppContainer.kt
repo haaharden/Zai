@@ -45,7 +45,7 @@ class AppContainer(context: Context) {
     val shizukuBridge: ShizukuBridge = ShizukuBridge(appContext)
     val agentRuntime: AgentRuntime = PiEngine(appContext, credentialVault)
     val appDirectory: AppDirectory = AndroidAppDirectory(appContext)
-    val assistantBackend = AndroidSystemAssistantBackend(appContext, appDirectory)
+    val assistantBackend = AndroidSystemAssistantBackend(appContext, appDirectory, shizukuBridge)
     val toolRegistry: PhoneToolRegistry = PhoneToolRegistry.default(assistantBackend)
     val safetyGuard: SafetyGuard = SafetyGuard()
     val mcpClient: McpToolClient = StreamableHttpMcpClient()

@@ -4,6 +4,7 @@ import com.self.zai.phone.AppDirectory
 import com.self.zai.phone.ScreenSnapshot
 import com.self.zai.phone.UiElement
 import com.self.zai.phone.channel.PhoneDeviceChannel
+import com.self.zai.pi.BeforeToolVerdict
 import com.self.zai.pi.ToolExecutionResult
 import org.json.JSONArray
 import org.json.JSONObject
@@ -18,6 +19,14 @@ interface PhoneToolContext {
 
     fun resolveElement(id: Int): UiElement? = lastSnapshot?.elements?.firstOrNull { it.index == id }
     suspend fun observeScreen(prefix: String? = null, forceImage: Boolean = false): ToolExecutionResult
+    suspend fun refreshTreeSnapshot(): ScreenSnapshot? = lastSnapshot
+    suspend fun checkSubActionSafety(
+        callId: String,
+        toolName: String,
+        args: JSONObject,
+        humanLabel: String,
+        targetElement: UiElement?,
+    ): BeforeToolVerdict? = null
 }
 
 /**

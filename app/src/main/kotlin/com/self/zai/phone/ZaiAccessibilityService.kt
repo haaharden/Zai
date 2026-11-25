@@ -7,16 +7,19 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicLong
 
 data class UiElement(
     val index: Int,
@@ -95,9 +98,95 @@ class ZaiAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        event?.packageName?.toString()?.takeIf { it.isNotBlank() }?.let {
-            lastEventPackage = it
+        if (event == null) return
+        val now = SystemClock.uptimeMillis()
+        lastEventUptimeMs = now
+        eventSeq.incrementAndGet()
+        event.packageName?.toString()?.takeIf { it.isNotBlank() }?.let { pkg ->
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                lastWindowChangeUptimeMs = now
+                lastEventPackage = pkg
+            } else if (lastEventPackage.isBlank()) {
+                lastEventPackage = pkg
+            }
         }
+    }
+
+    /**
+     * Event-driven UI stability wait replacing rigid fixed delays:
+     * returns as soon as the UI reacts and stays quiet for [quietWindowMs], while bounding noisy
+     * animations/countdowns by [maxWaitMs] and waiting for real package transitions when requested.
+     */
+    suspend fun waitForUiSettle(
+        minWaitMs: Long = 120L,
+        quietWindowMs: Long = 160L,
+        maxWaitMs: Long = 850L,
+        waitForPackageChangeFrom: String? = null,
+    ) {
+        val startSeq = eventSeq.get()
+        val startUptime = SystemClock.uptimeMillis()
+        val effectiveMin = minWaitMs.coerceAtLeast(40L)
+        val effectiveMax = maxWaitMs.coerceAtLeast(effectiveMin)
+
+        delay(effectiveMin)
+        while (true) {
+            val now = SystemClock.uptimeMillis()
+            val elapsed = now - startUptime
+            if (elapsed >= effectiveMax) break
+
+            val waitingForPkgSwitch = !waitForPackageChangeFrom.isNullOrBlank() && run {
+                val livePkg = rootInActiveWindow?.packageName?.toString()?.ifBlank { lastEventPackage } ?: lastEventPackage
+                livePkg == waitForPackageChangeFrom
+            }
+
+            if (!waitingForPkgSwitch) {
+                val sawChange = eventSeq.get() > startSeq
+                val quietFor = now - lastEventUptimeMs
+                if (sawChange && quietFor >= quietWindowMs) {
+                    break
+                }
+                if (!sawChange && elapsed >= effectiveMin + 140L) {
+                    break
+                }
+            }
+            delay(40L)
+        }
+    }
+
+    /**
+     * Fast zero-gesture native click via `AccessibilityNodeInfo.ACTION_CLICK`.
+     * Avoids 80ms touch-injection delay on standard clickable Android views; callers fall back to
+     * gesture tap if a custom canvas/WebView node returns false.
+     */
+    fun clickAtBounds(targetBounds: Rect): Boolean {
+        val root = rootInActiveWindow ?: return false
+        var bestNode: AccessibilityNodeInfo? = null
+        var bestArea = Long.MAX_VALUE
+        val cx = targetBounds.centerX()
+        val cy = targetBounds.centerY()
+
+        fun walk(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 28) return
+            if (!node.isVisibleToUser) return
+            val r = Rect()
+            node.getBoundsInScreen(r)
+            if (r.contains(cx, cy)) {
+                if (node.isClickable) {
+                    val area = r.width().toLong() * r.height().toLong()
+                    if (area in 1 until bestArea) {
+                        bestArea = area
+                        bestNode = node
+                    }
+                }
+                for (i in 0 until node.childCount) {
+                    walk(node.getChild(i), depth + 1)
+                }
+            }
+        }
+
+        walk(root, 0)
+        val target = bestNode ?: return false
+        return runCatching { target.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
     }
 
     override fun onInterrupt() {
@@ -201,6 +290,9 @@ class ZaiAccessibilityService : AccessibilityService() {
 
         find(root, 0)
         val node = target ?: root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        if (!node.isFocused) {
+            runCatching { node.performAction(AccessibilityNodeInfo.ACTION_FOCUS) }
+        }
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
@@ -289,6 +381,14 @@ class ZaiAccessibilityService : AccessibilityService() {
         @Volatile
         var lastEventPackage: String = ""
             private set
+
+        @Volatile
+        private var lastEventUptimeMs: Long = 0L
+
+        @Volatile
+        private var lastWindowChangeUptimeMs: Long = 0L
+
+        private val eventSeq = AtomicLong(0L)
 
         private val _isConnected = MutableStateFlow(false)
         val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
