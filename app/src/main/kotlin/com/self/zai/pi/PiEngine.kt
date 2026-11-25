@@ -38,6 +38,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Hosts unmodified `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` inside a hidden Android WebView.
@@ -97,6 +98,8 @@ class PiEngine(
 
     @Volatile
     private var hotBootWatchdogJob: Job? = null
+
+    private val pendingResetCreditCalls = ConcurrentHashMap<String, CompletableDeferred<Result<String>>>()
 
     private val nativeHttp = NativeHttp(
         scope = scope,
@@ -182,6 +185,23 @@ class PiEngine(
             .put("provider", providerId)
             .put("force", force)
         callJs("refreshQuota", payload.toString())
+    }
+
+    override suspend fun consumeResetCredit(providerId: String, creditId: String?): Result<String> {
+        if (!_isReady.value) return Result.failure(IllegalStateException("Pi 引擎尚未就绪"))
+        val requestId = "rc_${UUID.randomUUID().toString().take(8)}"
+        val deferred = CompletableDeferred<Result<String>>()
+        pendingResetCreditCalls[requestId] = deferred
+        val payload = JSONObject()
+            .put("requestId", requestId)
+            .put("provider", providerId)
+        if (!creditId.isNullOrBlank()) {
+            payload.put("creditId", creditId)
+        }
+        callJs("consumeResetCredit", payload.toString())
+        val res = withTimeoutOrNull(20_000L) { deferred.await() }
+        pendingResetCreditCalls.remove(requestId)
+        return res ?: Result.failure(IllegalStateException("重置卡请求超时，请稍后刷新状态"))
     }
 
     override fun startChatGptLogin(method: String) {
@@ -422,6 +442,10 @@ class PiEngine(
         readySignal = CompletableDeferred()
         nativeHttp.cancelAll()
         loopbackServer.closeAll()
+        for ((reqId, waiter) in pendingResetCreditCalls) {
+            pendingResetCreditCalls.remove(reqId)
+            waiter.complete(Result.failure(IllegalStateException(reason)))
+        }
         if (_authState.value is AuthUiState.InProgress) {
             _authState.value = AuthUiState.Failed("$reason，请重新登录")
         }
@@ -477,6 +501,14 @@ class PiEngine(
                 val next = _providerQuotas.value.toMutableMap()
                 if (parsed == null) next.remove(providerId) else next[providerId] = parsed
                 _providerQuotas.value = next
+            }
+
+            "reset_credit_result" -> {
+                val requestId = msg.optString("requestId")
+                val ok = msg.optBoolean("ok", false)
+                val message = msg.optString("message", if (ok) "重置卡已生效" else "使用重置卡失败")
+                val outcome = if (ok) Result.success(message) else Result.failure(IllegalStateException(message))
+                pendingResetCreditCalls.remove(requestId)?.complete(outcome)
             }
 
             "auth_event" -> {

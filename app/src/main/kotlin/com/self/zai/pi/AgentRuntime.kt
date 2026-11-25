@@ -107,6 +107,10 @@ interface AgentRuntime {
     suspend fun awaitReady()
     fun syncCustomProviders(customProviders: List<CustomProviderConfig>)
     fun refreshProviderQuota(providerId: String = PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID, force: Boolean = false)
+    suspend fun consumeResetCredit(
+        providerId: String = PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID,
+        creditId: String? = null,
+    ): Result<String> = Result.failure(UnsupportedOperationException("当前环境不支持重置卡"))
     fun startChatGptLogin(method: String = "browser")
     fun cancelLogin()
     fun submitAuthPrompt(promptId: String, value: String)

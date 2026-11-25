@@ -21,8 +21,21 @@ class ModelSelectionManager(
     private val runtime: AgentRuntime,
     private val onSessionConfigInvalidated: (sessionId: String?) -> Unit,
 ) {
+    /** Applies user-selected model filtering for subscription providers while preserving full custom catalogs. */
+    fun visibleProviders(rawProviders: List<ProviderStatus> = runtime.providers.value): List<ProviderStatus> {
+        val enabledMap = repository.settings.value.enabledSubscriptionModels
+        return rawProviders.map { p ->
+            if (p.isCustom) return@map p
+            val chosen = enabledMap[p.id]
+            if (chosen.isNullOrEmpty()) return@map p
+            val chosenSet = chosen.toSet()
+            val filtered = p.models.filter { it.id in chosenSet }
+            if (filtered.isEmpty()) p else p.copy(models = filtered)
+        }
+    }
+
     fun allAvailableModels(): List<ModelOption> =
-        runtime.providers.value
+        visibleProviders(runtime.providers.value)
             .filter { it.isConnected }
             .flatMap { it.models }
 
@@ -129,7 +142,7 @@ class ModelSelectionManager(
     }
 
     fun ensureValidDefaultModel(providers: List<ProviderStatus>) {
-        val available = providers.filter { it.isConnected }.flatMap { it.models }
+        val available = visibleProviders(providers).filter { it.isConnected }.flatMap { it.models }
         if (available.isEmpty()) return
         val cur = repository.settings.value
         val currentModel = available.firstOrNull {
@@ -146,6 +159,22 @@ class ModelSelectionManager(
                 )
             }
         }
+    }
+
+    fun updateSubscriptionEnabledModels(providerId: String, selectedModelIds: List<String>) {
+        val distinct = selectedModelIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        val fullModels = runtime.providers.value.firstOrNull { it.id == providerId }?.models.orEmpty()
+        repository.updateSettings { current ->
+            val nextMap = current.enabledSubscriptionModels.toMutableMap()
+            if (distinct.isEmpty() || (fullModels.isNotEmpty() && distinct.size >= fullModels.size)) {
+                nextMap.remove(providerId)
+            } else {
+                nextMap[providerId] = distinct
+            }
+            current.copy(enabledSubscriptionModels = nextMap)
+        }
+        ensureValidDefaultModel(runtime.providers.value)
+        onSessionConfigInvalidated(null)
     }
 
     fun saveCustomProvider(

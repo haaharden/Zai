@@ -85,15 +85,34 @@ const arg = (json: string) => JSON.parse(json);
       if (a.credentials) {
         await credentials.load(JSON.parse(a.credentials));
       }
-      await providerRegistry.syncCustomProviders(a.customProviders ?? [], a.customKeys ?? {});
+      const customList = a.customProviders ?? [];
+      quotaTracker.setCustomProviders(customList);
+      await providerRegistry.syncCustomProviders(customList, a.customKeys ?? {});
       await emitStatus();
       void quotaTracker.refresh(PRIMARY_OAUTH_PROVIDER_ID, false);
+      for (const cfg of customList) {
+        void quotaTracker.refresh(cfg.id, false);
+      }
     }),
   status: () => guard("status", emitStatus),
   refreshQuota: (json: string) =>
     guard("refreshQuota", async () => {
       const a = arg(json);
       await quotaTracker.refresh(a.provider ?? PRIMARY_OAUTH_PROVIDER_ID, !!a.force);
+    }),
+  consumeResetCredit: (json: string) =>
+    guard("consumeResetCredit", async () => {
+      const a = arg(json);
+      const provider = a.provider ?? PRIMARY_OAUTH_PROVIDER_ID;
+      const result = await quotaTracker.consumeResetCredit(provider, a.creditId);
+      bridge({
+        type: "reset_credit_result",
+        requestId: a.requestId ?? "",
+        provider,
+        ok: result.ok,
+        message: result.message,
+        windowsReset: result.windowsReset ?? 0,
+      });
     }),
   compact: (json: string) => {
     const a = arg(json);
@@ -102,8 +121,13 @@ const arg = (json: string) => JSON.parse(json);
   syncCustomProviders: (json: string) =>
     guard("syncCustomProviders", async () => {
       const a = arg(json);
-      await providerRegistry.syncCustomProviders(a.providers ?? [], a.keys ?? {});
+      const list = a.providers ?? [];
+      quotaTracker.setCustomProviders(list);
+      await providerRegistry.syncCustomProviders(list, a.keys ?? {});
       await emitStatus();
+      for (const cfg of list) {
+        void quotaTracker.refresh(cfg.id, false);
+      }
     }),
   lookupModels: (json: string) => JSON.stringify(providerRegistry.lookupModels(arg(json).ids ?? [])),
   login: (json: string) =>

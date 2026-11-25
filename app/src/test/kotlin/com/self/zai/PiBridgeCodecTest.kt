@@ -193,4 +193,51 @@ class PiBridgeCodecTest {
         assertEquals(8, compactEv.foldedCount)
         assertEquals(24, compactEv.percent)
     }
+
+    @Test
+    fun parseProviderQuota_decodesBalanceProvidersAndCodexResetCredits() {
+        val dsJson = JSONObject(
+            """
+            {
+              "providerId": "custom_ds",
+              "kind": "balance",
+              "summaryText": "余 ¥110.00",
+              "detailText": "充值 ¥100.00 · 赠金 ¥10.00",
+              "creditsBalance": "¥110.00",
+              "limitReached": false,
+              "updatedAtMs": 1800000000000
+            }
+            """.trimIndent(),
+        )
+        val ds = PiBridgeCodec.parseProviderQuota("custom_ds", dsJson)
+        assertNotNull(ds)
+        assertEquals("balance", ds!!.kind)
+        assertEquals("余 ¥110.00", ds.compactInlineLabel())
+        assertEquals("充值 ¥100.00 · 赠金 ¥10.00", ds.detailText)
+
+        val codexWithReset = JSONObject(
+            """
+            {
+              "providerId": "openai-codex",
+              "kind": "subscription",
+              "summaryText": "5h 40% · 周 80%",
+              "planType": "plus",
+              "resetCredits": {
+                "availableCount": 2,
+                "applicableCount": 1,
+                "credits": [
+                  { "creditId": "crt_001", "status": "available", "resetType": "weekly_limit", "expiresAtMs": 1850000000000 }
+                ]
+              },
+              "limitReached": false,
+              "updatedAtMs": 1800000000000
+            }
+            """.trimIndent(),
+        )
+        val codex = PiBridgeCodec.parseProviderQuota("openai-codex", codexWithReset)
+        assertNotNull(codex)
+        assertEquals(2, codex!!.resetCredits?.availableCount)
+        assertEquals("crt_001", codex.resetCredits?.credits?.firstOrNull()?.creditId)
+        assertEquals("5h 40% · 周 80%", codex.compactInlineLabel())
+    }
 }

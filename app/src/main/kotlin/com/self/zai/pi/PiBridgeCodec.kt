@@ -7,6 +7,8 @@ import com.self.zai.model.ModelOption
 import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.model.QuotaWindow
+import com.self.zai.model.ResetCreditItem
+import com.self.zai.model.ResetCreditsInfo
 import com.self.zai.model.SessionContextUsage
 import org.json.JSONArray
 import org.json.JSONObject
@@ -229,8 +231,35 @@ object PiBridgeCodec {
                 resetAtMs = w.optLong("resetAtMs", 0L),
             )
         }
+        fun parseResetCredits(rc: JSONObject?): ResetCreditsInfo? {
+            if (rc == null) return null
+            val arr = rc.optJSONArray("credits") ?: JSONArray()
+            val items = buildList {
+                for (i in 0 until arr.length()) {
+                    val c = arr.optJSONObject(i) ?: continue
+                    val cid = c.optString("creditId").trim()
+                    if (cid.isEmpty()) continue
+                    add(
+                        ResetCreditItem(
+                            creditId = cid,
+                            status = c.optString("status", "available"),
+                            resetType = c.optString("resetType").takeIf { it.isNotBlank() && it != "null" },
+                            expiresAtMs = c.optLong("expiresAtMs", 0L),
+                        ),
+                    )
+                }
+            }
+            return ResetCreditsInfo(
+                availableCount = rc.optInt("availableCount", items.size).coerceAtLeast(0),
+                applicableCount = rc.optInt("applicableCount", rc.optInt("availableCount", items.size)).coerceAtLeast(0),
+                credits = items,
+            )
+        }
         return ProviderQuota(
             providerId = providerId.ifBlank { obj.optString("providerId", PRIMARY_OAUTH_PROVIDER_ID) },
+            kind = obj.optString("kind", "subscription").ifBlank { "subscription" },
+            summaryText = obj.optString("summaryText").takeIf { it.isNotBlank() && it != "null" },
+            detailText = obj.optString("detailText").takeIf { it.isNotBlank() && it != "null" },
             planType = obj.optString("planType").takeIf { it.isNotBlank() && it != "null" },
             email = obj.optString("email").takeIf { it.isNotBlank() && it != "null" },
             primary = parseWindow(obj.optJSONObject("primary")),
@@ -242,6 +271,7 @@ object PiBridgeCodec {
                 null
             },
             creditsBalance = obj.optString("creditsBalance").takeIf { it.isNotBlank() && it != "null" },
+            resetCredits = parseResetCredits(obj.optJSONObject("resetCredits")),
             updatedAtMs = obj.optLong("updatedAtMs", System.currentTimeMillis()),
             error = obj.optString("error").takeIf { it.isNotBlank() && it != "null" },
         )

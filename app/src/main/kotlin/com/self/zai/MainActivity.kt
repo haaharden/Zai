@@ -238,13 +238,16 @@ private fun ZaiRoot(
     val activeSession = remember(sessions, activeSessionId) {
         sessions.firstOrNull { it.id == activeSessionId } ?: coordinator.currentSession()
     }
-    val defaultModel = remember(providers, settings.activeProviderId, settings.activeModelId) {
+    val visibleProviders = remember(providers, settings.enabledSubscriptionModels) {
+        coordinator.visibleProviders(providers)
+    }
+    val defaultModel = remember(visibleProviders, settings.activeProviderId, settings.activeModelId) {
         coordinator.defaultModelOption()
     }
     val defaultThinkingLevel = remember(defaultModel, settings.thinkingLevel) {
         coordinator.defaultThinkingLevel()
     }
-    val sessionModel = remember(providers, activeSession.providerId, activeSession.modelId, defaultModel) {
+    val sessionModel = remember(visibleProviders, activeSession.providerId, activeSession.modelId, defaultModel) {
         coordinator.sessionModelOption(activeSession)
     }
     val sessionThinkingLevel = remember(sessionModel, activeSession.thinkingLevel, settings.thinkingLevel) {
@@ -261,7 +264,7 @@ private fun ZaiRoot(
             session = activeSession,
             allSessions = sessions,
             storageBytes = storageBytes,
-            providers = providers,
+            providers = visibleProviders,
             providerQuotas = providerQuotas,
             enabledSkills = enabledSkills,
             sessionModel = sessionModel,
@@ -330,6 +333,10 @@ private fun ZaiRoot(
                         activeModel = defaultModel,
                         authState = authState,
                         onRefreshQuota = { pid, force -> runtime.refreshProviderQuota(pid, force) },
+                        onConsumeResetCredit = { pid, cid -> runtime.consumeResetCredit(pid, cid) },
+                        onUpdateSubscriptionModels = { pid, ids ->
+                            coordinator.updateSubscriptionEnabledModels(pid, ids)
+                        },
                         onSelectModel = { pid, mid -> coordinator.selectDefaultModel(pid, mid) },
                         onStartChatGptLogin = { method -> runtime.startChatGptLogin(method) },
                         onCancelLogin = { runtime.cancelLogin() },
@@ -351,7 +358,7 @@ private fun ZaiRoot(
 
                     OverlayRoute.SETTINGS -> SettingsScreen(
                         settings = settings,
-                        providers = providers,
+                        providers = visibleProviders,
                         providerQuotas = providerQuotas,
                         defaultModel = defaultModel,
                         defaultThinkingLevel = defaultThinkingLevel,

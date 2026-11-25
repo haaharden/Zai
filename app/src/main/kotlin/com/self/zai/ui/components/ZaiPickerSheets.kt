@@ -44,11 +44,11 @@ import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.model.QuotaWindow
 import com.self.zai.model.ThinkingLevelDisplay
-import com.self.zai.pi.PiBridgeCodec
 
 /**
  * Shared clean bottom sheet for picking a connected model (used both above the chat composer
  * for per-conversation switching and inside Settings for global default model selection).
+ * Shows the live remaining quota card strictly for the currently selected model's provider.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,10 +64,12 @@ fun ZaiModelPickerSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val connected = providers.filter { it.isConnected && it.models.isNotEmpty() }
+    val activeProvider = connected.firstOrNull { it.id == selectedModel?.providerId } ?: connected.firstOrNull()
 
-    LaunchedEffect(connected.size) {
-        if (connected.any { it.id == PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID }) {
-            onRefreshQuota?.invoke(PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID, false)
+    LaunchedEffect(activeProvider?.id) {
+        val pid = activeProvider?.id
+        if (!pid.isNullOrBlank()) {
+            onRefreshQuota?.invoke(pid, false)
         }
     }
 
@@ -131,10 +133,27 @@ fun ZaiModelPickerSheet(
                     }
                 }
             } else {
+                // Show remaining quota strictly for the currently active model's provider
+                if (activeProvider != null) {
+                    val activeQuota = providerQuotas[activeProvider.id]
+                    val expectsQuota = activeQuota != null ||
+                        activeProvider.supportsOAuth ||
+                        activeProvider.name.contains("openrouter", ignoreCase = true) ||
+                        activeProvider.name.contains("deepseek", ignoreCase = true)
+                    if (expectsQuota) {
+                        ProviderQuotaStrip(
+                            providerLabel = activeProvider.name,
+                            quota = activeQuota,
+                            onRefresh = { onRefreshQuota?.invoke(activeProvider.id, true) },
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 480.dp)
+                        .heightIn(max = 460.dp)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
@@ -152,31 +171,24 @@ fun ZaiModelPickerSheet(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.weight(1f),
                                 )
-                                val plan = providerQuotas[provider.id]?.planDisplayLabel()
-                                if (!plan.isNullOrBlank()) {
+                                val q = providerQuotas[provider.id]
+                                val badge = q?.planDisplayLabel() ?: q?.compactInlineLabel()
+                                if (!badge.isNullOrBlank()) {
                                     Text(
-                                        text = plan,
+                                        text = badge,
                                         style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (q?.limitReached == true) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.primary
+                                        },
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(8.dp))
-                                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f))
+                                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f))
                                             .padding(horizontal = 7.dp, vertical = 2.dp),
                                     )
                                 }
-                            }
-
-                            // Show live remaining quota card for ChatGPT Codex OAuth
-                            if (provider.id == PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID &&
-                                provider.credentialType == "oauth"
-                            ) {
-                                ProviderQuotaStrip(
-                                    quota = providerQuotas[provider.id],
-                                    onRefresh = {
-                                        onRefreshQuota?.invoke(provider.id, true)
-                                    },
-                                )
                             }
 
                             Column(
@@ -251,15 +263,17 @@ fun ZaiModelPickerSheet(
 }
 
 /**
- * Quiet Anthropic-styled account remaining quota strip showing 5h / weekly rolling windows
- * and reset countdowns with one-tap refresh.
+ * Unified Anthropic-styled quota strip supporting both rolling-window subscriptions (5h / weekly + reset cards)
+ * and prepaid API balance providers (DeepSeek / OpenRouter).
  */
 @Composable
 fun ProviderQuotaStrip(
     quota: ProviderQuota?,
     onRefresh: () -> Unit,
+    providerLabel: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val prefix = providerLabel?.takeIf { it.isNotBlank() }?.let { "$it · " }.orEmpty()
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -274,11 +288,12 @@ fun ProviderQuotaStrip(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val headerLabel = when {
-                quota == null -> "正在查询账号剩余额度…"
-                quota.limitReached -> "当前周期额度已用尽"
-                quota.primary != null || quota.secondary != null -> "账号剩余额度"
-                !quota.error.isNullOrBlank() -> quota.error
-                else -> "账号额度"
+                quota == null -> "${prefix}正在查询剩余额度…"
+                quota.limitReached -> "${prefix}额度已用尽"
+                quota.kind == "balance" -> "${prefix}账户余额"
+                quota.primary != null || quota.secondary != null -> "${prefix}剩余额度"
+                !quota.error.isNullOrBlank() -> "${prefix}${quota.error}"
+                else -> "${prefix}账号额度"
             }
             Text(
                 text = headerLabel,
@@ -288,11 +303,22 @@ fun ProviderQuotaStrip(
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (!quota?.creditsBalance.isNullOrBlank()) {
+            val resetCount = quota?.resetCredits?.availableCount ?: 0
+            if (resetCount > 0) {
                 Text(
-                    text = "余额 ${quota.creditsBalance}",
+                    text = "重置卡 $resetCount",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(end = 6.dp),
+                )
+            } else if (quota?.kind != "balance" && !quota?.creditsBalance.isNullOrBlank()) {
+                Text(
+                    text = "余额 ${quota?.creditsBalance}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(end = 6.dp),
@@ -328,8 +354,32 @@ fun ProviderQuotaStrip(
                         )
                     }
                 }
+            } else if (quota.kind == "balance" && !quota.summaryText.isNullOrBlank()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = quota.summaryText,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (quota.limitReached) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (!quota.detailText.isNullOrBlank()) {
+                        Text(
+                            text = quota.detailText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
             }
-            if (!quota.error.isNullOrBlank() && windows.isNotEmpty()) {
+            if (!quota.error.isNullOrBlank() && (windows.isNotEmpty() || !quota.summaryText.isNullOrBlank())) {
                 Text(
                     text = quota.error,
                     style = MaterialTheme.typography.labelSmall,

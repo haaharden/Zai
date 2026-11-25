@@ -194,6 +194,39 @@ class AgentCoordinatorTest {
     }
 
     @Test
+    fun modelSelection_filtersSubscriptionModelsAndReassignsDefaultWhenUnchecked() = runBlocking {
+        val repo = InMemorySessionRepository()
+        val vault = InMemoryVault()
+        val runtime = FakeAgentRuntime()
+        val m1 = ModelOption("openai-codex", "ChatGPT Codex", "gpt-5.4", "GPT-5.4", 400_000, true, listOf("low", "high"))
+        val m2 = ModelOption("openai-codex", "ChatGPT Codex", "gpt-5.3-codex", "GPT-5.3 Codex", 400_000, true, listOf("medium", "high"))
+        val m3 = ModelOption("openai-codex", "ChatGPT Codex", "gpt-5-mini", "GPT-5 Mini", 200_000, true, listOf("low"))
+        runtime.setProviders(
+            listOf(
+                ProviderStatus(
+                    id = "openai-codex",
+                    name = "ChatGPT Codex",
+                    credentialType = "oauth",
+                    isCustom = false,
+                    supportsOAuth = true,
+                    models = listOf(m1, m2, m3),
+                ),
+            ),
+        )
+        val mgr = ModelSelectionManager(repo, vault, runtime) {}
+        mgr.ensureValidDefaultModel(runtime.providers.value)
+        assertEquals(3, mgr.visibleProviders().first().models.size)
+        assertEquals("gpt-5.4", mgr.defaultModelOption()?.id)
+
+        // Enable only gpt-5.3-codex -> default automatically moves from unchecked gpt-5.4 to gpt-5.3-codex
+        mgr.updateSubscriptionEnabledModels("openai-codex", listOf("gpt-5.3-codex"))
+        assertEquals(listOf("gpt-5.3-codex"), mgr.visibleProviders().first().models.map { it.id })
+        assertEquals("gpt-5.3-codex", mgr.defaultModelOption()?.id)
+        // Raw provider list in runtime remains intact so user can re-enable hidden models anytime
+        assertEquals(3, runtime.providers.value.first().models.size)
+    }
+
+    @Test
     fun coordinator_handlesStreaming_runtimeResetRecovery_andAutoReturnFallback() = runBlocking {
         val repo = InMemorySessionRepository()
         val vault = InMemoryVault()

@@ -118,6 +118,7 @@ data class AppSettings(
     val assistantTtsMode: TtsReadoutMode = TtsReadoutMode.HEADSET_ONLY,
     val compactionMode: CompactionMode = CompactionMode.ACP,
     val compactionThresholdPercent: Int = 75,
+    val enabledSubscriptionModels: Map<String, List<String>> = emptyMap(),
 )
 
 data class ModelOption(
@@ -272,8 +273,24 @@ data class QuotaWindow(
     }
 }
 
+data class ResetCreditItem(
+    val creditId: String,
+    val status: String = "available",
+    val resetType: String? = null,
+    val expiresAtMs: Long = 0L,
+)
+
+data class ResetCreditsInfo(
+    val availableCount: Int = 0,
+    val applicableCount: Int = 0,
+    val credits: List<ResetCreditItem> = emptyList(),
+)
+
 data class ProviderQuota(
     val providerId: String,
+    val kind: String = "subscription", // "subscription" or "balance"
+    val summaryText: String? = null,
+    val detailText: String? = null,
     val planType: String? = null,
     val email: String? = null,
     val primary: QuotaWindow? = null,
@@ -281,6 +298,7 @@ data class ProviderQuota(
     val limitReached: Boolean = false,
     val creditsUnlimited: Boolean? = null,
     val creditsBalance: String? = null,
+    val resetCredits: ResetCreditsInfo? = null,
     val updatedAtMs: Long = System.currentTimeMillis(),
     val error: String? = null,
 ) {
@@ -292,6 +310,13 @@ data class ProviderQuota(
         "free" -> "Free"
         null, "" -> null
         else -> planType.replaceFirstChar { it.uppercase() }
+    }
+
+    fun compactInlineLabel(): String? = when {
+        !summaryText.isNullOrBlank() -> summaryText
+        primary != null -> "${primary.windowLabel()} ${primary.remainingPercent}%"
+        !creditsBalance.isNullOrBlank() -> "余 $creditsBalance"
+        else -> null
     }
 }
 

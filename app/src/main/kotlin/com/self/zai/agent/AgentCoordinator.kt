@@ -186,6 +186,8 @@ class AgentCoordinator(
     }
 
     fun defaultModelOption(): ModelOption? = modelSelection.defaultModelOption()
+    fun visibleProviders(rawProviders: List<com.self.zai.model.ProviderStatus> = runtime.providers.value): List<com.self.zai.model.ProviderStatus> =
+        modelSelection.visibleProviders(rawProviders)
     fun defaultThinkingLevel(): String = modelSelection.defaultThinkingLevel()
     fun sessionModelOption(session: ChatSession): ModelOption? = modelSelection.sessionModelOption(session)
     fun sessionThinkingLevel(
@@ -207,6 +209,10 @@ class AgentCoordinator(
 
     fun selectSessionThinkingLevel(level: String) {
         modelSelection.selectSessionThinkingLevel(currentSession(), level)
+    }
+
+    fun updateSubscriptionEnabledModels(providerId: String, selectedModelIds: List<String>) {
+        modelSelection.updateSubscriptionEnabledModels(providerId, selectedModelIds)
     }
 
     fun saveCustomProvider(

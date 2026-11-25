@@ -8,10 +8,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -93,6 +96,7 @@ internal fun CustomProviderEditorSheet(
     var fetching by remember { mutableStateOf(false) }
     var fetchError by remember { mutableStateOf<String?>(null) }
     var filterQuery by remember { mutableStateOf("") }
+    var showSelectedOnly by remember { mutableStateOf(false) }
     var manualModelInput by remember { mutableStateOf("") }
 
     val discoveredPool = remember(editing) {
@@ -187,6 +191,7 @@ internal fun CustomProviderEditorSheet(
                             baseUrl = found.resolvedBaseUrl
                             val ids = found.models.map { it.id }
                             onLookupCatalogMetadata(ids) { catalogMeta ->
+                                val prevSelected = selectedIds.toSet()
                                 discoveredPool.clear()
                                 found.models.forEach { d ->
                                     val meta = catalogMeta[d.id]
@@ -199,9 +204,16 @@ internal fun CustomProviderEditorSheet(
                                         api = apiProtocol,
                                     )
                                 }
+                                // Keep previously manually added & selected models visible if absent in remote list
+                                editing?.models?.forEach { existing ->
+                                    if (existing.id in prevSelected && discoveredPool.none { it.id == existing.id }) {
+                                        discoveredPool.add(0, existing)
+                                    }
+                                }
                                 if (selectedIds.isEmpty()) {
                                     discoveredPool.take(3).forEach { selectedIds.add(it.id) }
                                 }
+                                showSelectedOnly = false
                             }
                         }.onFailure { err ->
                             fetchError = err.message ?: "拉取模型失败"
@@ -256,16 +268,33 @@ internal fun CustomProviderEditorSheet(
             }
 
             if (discoveredPool.isNotEmpty()) {
+                val query = filterQuery.trim()
+                val filtered = remember(discoveredPool.size, query, showSelectedOnly, selectedIds.size) {
+                    discoveredPool.filter { item ->
+                        (!showSelectedOnly || selectedIds.contains(item.id)) &&
+                            (query.isEmpty() || item.id.contains(query, ignoreCase = true))
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "已发现 ${discoveredPool.size} 个模型，已选 ${selectedIds.size} 个",
+                        text = if (query.isEmpty() && !showSelectedOnly) {
+                            "共 ${discoveredPool.size} 个模型，已选 ${selectedIds.size} 个"
+                        } else {
+                            "显示 ${filtered.size}/${discoveredPool.size}，已选 ${selectedIds.size}"
+                        },
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
+                    if (selectedIds.isNotEmpty() && discoveredPool.size > 8) {
+                        TextButton(onClick = { showSelectedOnly = !showSelectedOnly }) {
+                            Text(if (showSelectedOnly) "看全部" else "只看已选")
+                        }
+                    }
                     if (discoveredPool.size > 1) {
                         TextButton(
                             onClick = {
@@ -286,22 +315,20 @@ internal fun CustomProviderEditorSheet(
                     ZaiTextField(
                         value = filterQuery,
                         onValueChange = { filterQuery = it },
-                        placeholder = "筛选模型名称",
+                        placeholder = "搜索全部 ${discoveredPool.size} 个模型（如 claude / gemini / deepseek）",
                     )
                 }
 
-                val filtered = discoveredPool.filter {
-                    filterQuery.isBlank() || it.id.contains(filterQuery.trim(), ignoreCase = true)
-                }.take(50)
-
-                Column(
+                // Virtualized LazyColumn smoothly renders all 400+ OpenRouter models with zero truncation
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(max = 320.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerLow)
                         .padding(vertical = 4.dp),
                 ) {
-                    filtered.forEach { m ->
+                    items(filtered, key = { it.id }) { m ->
                         val checked = selectedIds.contains(m.id)
                         Row(
                             modifier = Modifier
@@ -334,7 +361,7 @@ internal fun CustomProviderEditorSheet(
                                 Text(
                                     text = buildString {
                                         append("${m.contextWindow / 1000}K 上下文")
-                                        if (m.supportsImages) append("  支持看图")
+                                        if (m.supportsImages) append("  视觉")
                                         if (m.reasoning) append("  推理思考")
                                     },
                                     style = MaterialTheme.typography.labelSmall,
