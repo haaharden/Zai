@@ -382,7 +382,7 @@ fun AssistantOverlayScreen(
                         ) {
                             if (inputText.isEmpty()) {
                                 Text(
-                                    text = if (isListening) "正在聆听，请说话…" else "问 Zai，或点右侧语音…",
+                                    text = if (isListening) "聆听中…" else "问 Zai…",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = if (isListening) {
                                         MaterialTheme.colorScheme.primary
@@ -424,7 +424,7 @@ fun AssistantOverlayScreen(
                                 .background(
                                     when {
                                         isRunning -> MaterialTheme.colorScheme.error
-                                        canSend -> MaterialTheme.colorScheme.onBackground
+                                        canSend -> MaterialTheme.colorScheme.primary
                                         else -> MaterialTheme.colorScheme.surfaceVariant
                                     },
                                 )
@@ -438,7 +438,7 @@ fun AssistantOverlayScreen(
                                 contentDescription = if (isRunning) "停止" else "发送",
                                 tint = when {
                                     isRunning -> MaterialTheme.colorScheme.onError
-                                    canSend -> MaterialTheme.colorScheme.background
+                                    canSend -> MaterialTheme.colorScheme.onPrimary
                                     else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                 },
                                 modifier = Modifier.size(18.dp),
@@ -459,13 +459,12 @@ private fun OverlayIconPill(
 ) {
     Box(
         modifier = Modifier
-            .size(28.dp)
-            .clip(RoundedCornerShape(9.dp))
+            .size(30.dp)
+            .clip(CircleShape)
             .background(
                 if (active) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surfaceContainerLow,
+                else Color.Transparent,
             )
-            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(9.dp))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

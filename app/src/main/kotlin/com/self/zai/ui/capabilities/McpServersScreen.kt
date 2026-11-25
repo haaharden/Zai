@@ -127,43 +127,31 @@ fun McpServersScreen(
                 .navigationBarsPadding(),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            ZaiPaperGroup(title = "远程 Streamable HTTP MCP") {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text(
-                        text = "接入标准 MCP Streamable HTTP（JSON-RPC 2.0）服务，自动同步工具 Schema 并注入 Pi 内核；认证令牌使用 Android Keystore 加密存储。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    ZaiPrimaryButton(
-                        text = "添加 MCP 服务",
-                        onClick = {
-                            editingServer = null
-                            showEditor = true
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
+            ZaiPrimaryButton(
+                text = "添加 MCP 服务",
+                onClick = {
+                    editingServer = null
+                    showEditor = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
 
             if (servers.isEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                        .padding(horizontal = 18.dp, vertical = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                        .padding(horizontal = 18.dp, vertical = 22.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        text = "尚未接入 MCP 服务",
+                        text = "暂无 MCP 服务",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        text = "可接入联网搜索、日程笔记、家庭自动化或个人后端 MCP 服务，与手机操控联动。",
+                        text = "支持远程 Streamable HTTP 端点，凭证加密保存",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

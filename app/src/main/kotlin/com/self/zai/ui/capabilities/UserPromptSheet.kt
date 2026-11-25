@@ -74,7 +74,7 @@ fun UserPromptEditorSheet(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = "会追加在 Zai 内置基础提示词之后，对所有对话持续生效，可用于设定语气、习惯与默认偏好。",
+                text = "全局生效，用于设定回复风格与默认偏好",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -82,8 +82,7 @@ fun UserPromptEditorSheet(
             ZaiMultilineField(
                 value = draft,
                 onValueChange = { draft = it },
-                label = "自定义系统指令",
-                placeholder = "例如：回复尽量精简直给；涉及购物或下单前先汇总价格并征询确认；优先使用高德地图导航。",
+                placeholder = "例如：回复简洁直接；下单前先确认总价…",
                 minLines = 5,
                 maxLines = 12,
             )

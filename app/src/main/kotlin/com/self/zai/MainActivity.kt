@@ -15,18 +15,22 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.view.WindowCompat
 import com.self.zai.di.AppContainer
+import com.self.zai.model.ThemeMode
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.phone.ZaiAccessibilityService
 import com.self.zai.ui.capabilities.McpServersScreen
@@ -59,6 +63,18 @@ class MainActivity : ComponentActivity() {
         val app = application as ZaiApplication
         setContent {
             val settings by app.container.sessionRepository.settings.collectAsState()
+            val systemDark = isSystemInDarkTheme()
+            val isDark = when (settings.themeMode) {
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK, ThemeMode.AMOLED -> true
+                ThemeMode.SYSTEM -> systemDark
+            }
+            SideEffect {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !isDark
+                    isAppearanceLightNavigationBars = !isDark
+                }
+            }
             ZaiTheme(themeMode = settings.themeMode) {
                 ZaiRoot(
                     app = app,

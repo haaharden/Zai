@@ -173,16 +173,12 @@ fun ModelsAndAuthScreen(
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (signedIn) "已连接 ChatGPT Codex" else "未登录 ChatGPT",
+                                text = if (signedIn) "ChatGPT Codex" else "ChatGPT",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                             Text(
-                                text = if (signedIn) {
-                                    "已接入 Codex 订阅通道，由 Pi 内核自动刷新凭据并加密保存"
-                                } else {
-                                    "通过 OpenAI Codex 通道使用 ChatGPT Plus / Pro 订阅模型（支持 500K 上下文）"
-                                },
+                                text = if (signedIn) "已连接" else "Plus / Pro 订阅",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -332,7 +328,7 @@ fun ModelsAndAuthScreen(
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                     ZaiSecondaryButton(
-                                        text = "设备码登录（免本地回调）",
+                                        text = "设备码登录",
                                         onClick = { onStartChatGptLogin("device_code") },
                                         modifier = Modifier.fillMaxWidth(),
                                     )
@@ -373,30 +369,22 @@ fun ModelsAndAuthScreen(
                     }
                 },
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(
-                        text = "快速添加预设，填入密钥后自动拉取模型列表",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        PRESET_PROVIDERS.forEach { preset ->
-                            ZaiSecondaryButton(
-                                text = preset.name,
-                                onClick = {
-                                    editingProvider = null
-                                    selectedPreset = preset
-                                    showEditorSheet = true
-                                },
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
+                    PRESET_PROVIDERS.forEach { preset ->
+                        ZaiSecondaryButton(
+                            text = preset.name,
+                            onClick = {
+                                editingProvider = null
+                                selectedPreset = preset
+                                showEditorSheet = true
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                 }
 

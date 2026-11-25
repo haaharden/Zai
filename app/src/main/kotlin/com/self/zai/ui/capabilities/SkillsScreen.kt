@@ -109,65 +109,53 @@ fun SkillsScreen(
                 .navigationBarsPadding(),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            ZaiPaperGroup(title = "按需加载技能（兼容 SKILL.md）") {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text(
-                        text = "启用的技能只向模型暴露名称与简介，命中使用场景时自动通过 read_skill 按需加载正文，不浪费上下文；也可在聊天输入 /技能名 直接触发。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        ZaiPrimaryButton(
-                            text = "新建技能",
-                            onClick = {
-                                editingSkill = null
-                                prefillParsed = null
-                                showEditor = true
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                        ZaiSecondaryButton(
-                            text = "粘贴 SKILL.md",
-                            onClick = {
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
-                                val parsed = SkillMarkdownParser.parse(clip)
-                                if (parsed == null) {
-                                    Toast.makeText(context, "剪贴板为空，请先复制 SKILL.md 内容", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    editingSkill = null
-                                    prefillParsed = parsed
-                                    showEditor = true
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                ZaiPrimaryButton(
+                    text = "新建技能",
+                    onClick = {
+                        editingSkill = null
+                        prefillParsed = null
+                        showEditor = true
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                ZaiSecondaryButton(
+                    text = "粘贴 SKILL.md",
+                    onClick = {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+                        val parsed = SkillMarkdownParser.parse(clip)
+                        if (parsed == null) {
+                            Toast.makeText(context, "剪贴板无有效 SKILL.md", Toast.LENGTH_SHORT).show()
+                        } else {
+                            editingSkill = null
+                            prefillParsed = parsed
+                            showEditor = true
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                )
             }
 
             if (skills.isEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                        .padding(horizontal = 18.dp, vertical = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                        .padding(horizontal = 18.dp, vertical = 22.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        text = "尚未添加任何技能",
+                        text = "暂无技能",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        text = "把常用的手机操作流程（如比价下单、日报整理、固定回消息模板）存为 Skill，随时复用。",
+                        text = "支持标准 SKILL.md，聊天中输入 /名称 触发",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

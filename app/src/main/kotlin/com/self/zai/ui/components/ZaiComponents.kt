@@ -37,7 +37,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -217,11 +216,11 @@ fun ZaiSelectPill(
 fun zaiSwitchColors(): SwitchColors {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
     return SwitchDefaults.colors(
-        checkedThumbColor = Color.White,
+        checkedThumbColor = Color(0xFFFFFCF9),
         checkedTrackColor = MaterialTheme.colorScheme.primary,
         checkedBorderColor = Color.Transparent,
-        uncheckedThumbColor = if (isDark) Color(0xFFC4CCD8) else Color.White,
-        uncheckedTrackColor = if (isDark) Color(0xFF283140) else Color(0xFFD5DAE3),
+        uncheckedThumbColor = if (isDark) Color(0xFFC5C0B6) else Color.White,
+        uncheckedTrackColor = if (isDark) Color(0xFF36342F) else Color(0xFFDAD6CC),
         uncheckedBorderColor = Color.Transparent,
     )
 }
@@ -445,94 +444,64 @@ fun ZaiSecondaryButton(
 }
 
 /**
- * Bespoke architectural geometric "Z" monogram with sheared kinetic terminals and a glacier-cobalt focal jewel.
+ * Calligraphic editorial serif "Z." monogram matching Zai's warm terracotta app icon.
  */
 @Composable
 fun ZaiMonogramMark(
     size: Dp = 20.dp,
+    tint: Color = MaterialTheme.colorScheme.onBackground,
+    dotColor: Color = MaterialTheme.colorScheme.primary,
     modifier: Modifier = Modifier,
 ) {
-    val ink = MaterialTheme.colorScheme.onBackground
-    val spark = MaterialTheme.colorScheme.primary
-
     Canvas(modifier = modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
         val path = Path().apply {
-            moveTo(w * 0.14f, h * 0.15f)
-            lineTo(w * 0.75f, h * 0.15f)
-            lineTo(w * 0.75f, h * 0.275f)
-            lineTo(w * 0.30f, h * 0.725f)
-            lineTo(w * 0.73f, h * 0.725f)
-            lineTo(w * 0.67f, h * 0.85f)
-            lineTo(w * 0.08f, h * 0.85f)
-            lineTo(w * 0.08f, h * 0.725f)
-            lineTo(w * 0.53f, h * 0.275f)
-            lineTo(w * 0.085f, h * 0.275f)
+            // Sweeping left top serif beak -> crisp top bar -> italic diagonal -> upturned bottom serif tail
+            moveTo(w * 0.12f, h * 0.34f)
+            cubicTo(w * 0.14f, h * 0.20f, w * 0.19f, h * 0.15f, w * 0.30f, h * 0.15f)
+            lineTo(w * 0.74f, h * 0.15f)
+            lineTo(w * 0.31f, h * 0.79f)
+            lineTo(w * 0.54f, h * 0.79f)
+            cubicTo(w * 0.64f, h * 0.79f, w * 0.69f, h * 0.74f, w * 0.73f, h * 0.63f)
+            cubicTo(w * 0.71f, h * 0.79f, w * 0.66f, h * 0.85f, w * 0.55f, h * 0.85f)
+            lineTo(w * 0.09f, h * 0.85f)
+            lineTo(w * 0.52f, h * 0.21f)
+            lineTo(w * 0.30f, h * 0.21f)
+            cubicTo(w * 0.22f, h * 0.21f, w * 0.17f, h * 0.26f, w * 0.12f, h * 0.34f)
             close()
         }
-        drawPath(path = path, color = ink)
+        drawPath(path = path, color = tint)
         drawCircle(
-            color = spark,
-            radius = w * 0.068f,
-            center = Offset(w * 0.855f, h * 0.786f),
+            color = dotColor,
+            radius = w * 0.078f,
+            center = Offset(w * 0.855f, h * 0.775f),
         )
     }
 }
 
 /**
- * Minimal geometric Z precision touch-ring emblem used quietly in the empty canvas.
+ * Warm terracotta clay seal emblem containing an ivory Z monogram, echoing the app icon.
  */
 @Composable
 fun ZaiEmblemMark(
-    size: Dp = 48.dp,
+    size: Dp = 44.dp,
     modifier: Modifier = Modifier,
 ) {
-    val ink = MaterialTheme.colorScheme.onBackground
-    val ring = MaterialTheme.colorScheme.outlineVariant
-    val spark = MaterialTheme.colorScheme.primary
+    val sealColor = MaterialTheme.colorScheme.primary
+    val ivory = Color(0xFFFAF8F2)
 
-    Canvas(modifier = modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
-        val cx = w / 2f
-        val cy = h / 2f
-
-        // Outer concentric dial hairline
-        drawCircle(
-            color = ring,
-            radius = w * 0.48f,
-            center = Offset(cx, cy),
-            style = Stroke(width = w * 0.022f),
-        )
-        drawCircle(
-            color = ring.copy(alpha = 0.5f),
-            radius = w * 0.38f,
-            center = Offset(cx, cy),
-            style = Stroke(width = w * 0.016f),
-        )
-
-        // Centered sculpted Z monogram scaled cleanly inside the inner dial
-        val inset = w * 0.26f
-        val span = w - inset * 2f
-        val path = Path().apply {
-            moveTo(inset + span * 0.14f, inset + span * 0.15f)
-            lineTo(inset + span * 0.75f, inset + span * 0.15f)
-            lineTo(inset + span * 0.75f, inset + span * 0.275f)
-            lineTo(inset + span * 0.30f, inset + span * 0.725f)
-            lineTo(inset + span * 0.73f, inset + span * 0.725f)
-            lineTo(inset + span * 0.67f, inset + span * 0.85f)
-            lineTo(inset + span * 0.08f, inset + span * 0.85f)
-            lineTo(inset + span * 0.08f, inset + span * 0.725f)
-            lineTo(inset + span * 0.53f, inset + span * 0.275f)
-            lineTo(inset + span * 0.085f, inset + span * 0.275f)
-            close()
-        }
-        drawPath(path = path, color = ink)
-        drawCircle(
-            color = spark,
-            radius = span * 0.07f,
-            center = Offset(inset + span * 0.855f, inset + span * 0.786f),
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(RoundedCornerShape(size * 0.30f))
+            .background(sealColor),
+        contentAlignment = Alignment.Center,
+    ) {
+        ZaiMonogramMark(
+            size = size * 0.54f,
+            tint = ivory,
+            dotColor = ivory.copy(alpha = 0.85f),
         )
     }
 }

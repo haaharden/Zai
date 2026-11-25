@@ -40,7 +40,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -50,7 +49,6 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -135,12 +133,6 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
 
     val hasControlChannel = accessibilityConnected || shizukuStatus.isReady
-    val channelLabel = when {
-        accessibilityConnected && shizukuStatus.isReady -> "无障碍与 Shizuku 已就绪"
-        accessibilityConnected -> "无障碍已就绪"
-        shizukuStatus.isReady -> "Shizuku 已就绪"
-        else -> "尚未开启无障碍"
-    }
 
     // Smart bottom-pinning: respects manual scroll-up so reading history is never interrupted
     var autoFollowBottom by remember(session.id) { mutableStateOf(true) }
@@ -299,18 +291,14 @@ fun ChatScreen(
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    text = if (missingModel) {
-                        "先登录 ChatGPT 或添加供应商密钥"
-                    } else {
-                        "开启无障碍服务后即可控制手机"
-                    },
+                    text = if (missingModel) "先配置模型账号" else "开启无障碍即可操控手机",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = if (missingModel) "去配置" else "去开启",
+                    text = "设置",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold,
@@ -322,12 +310,7 @@ fun ChatScreen(
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (session.messages.isEmpty()) {
                 EditorialEmptyCanvas(
-                    statusLine = if (!piReady) "正在启动 Pi 内核" else channelLabel,
-                    onPickPrompt = { starter ->
-                        inputText = ""
-                        autoFollowBottom = true
-                        onSendMessage(starter)
-                    },
+                    piReady = piReady,
                 )
             } else {
                 LazyColumn(
@@ -459,8 +442,8 @@ fun ChatScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ComposerControlPill(
-                label = sessionModel?.id ?: "配置模型",
-                monospace = sessionModel != null,
+                label = sessionModel?.name ?: "选择模型",
+                monospace = false,
                 leadingDotColor = if (hasControlChannel) {
                     MaterialTheme.colorScheme.secondary
                 } else {
@@ -505,7 +488,7 @@ fun ChatScreen(
                 ) {
                     if (inputText.isEmpty()) {
                         Text(
-                            text = if (isRunning) "输入指令可随时插话调整" else "告诉 Z 在手机上做什么",
+                            text = if (isRunning) "输入可随时补充…" else "问 Zai…",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                         )
@@ -559,14 +542,14 @@ fun ChatScreen(
                         },
                         shape = CircleShape,
                         color = if (canSend) {
-                            MaterialTheme.colorScheme.onBackground
+                            MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.surfaceContainerLow
                         },
                         contentColor = if (canSend) {
-                            MaterialTheme.colorScheme.background
+                            MaterialTheme.colorScheme.onPrimary
                         } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
                         },
                         modifier = Modifier.size(38.dp),
                     ) {
@@ -738,57 +721,27 @@ fun ChatScreen(
 }
 
 /**
- * Tactile sculpted top-left "Z" keycap button that serves as the unified Settings entry point.
- * Styled with lifted surface contrast, crisp rim, gentle elevation, and a quiet settings cue so
- * users immediately recognize it as an interactive button.
+ * Minimal unboxed top-left Z settings mark: quiet editorial trigger with subtle update dot.
  */
 @Composable
 private fun ZSettingsButton(
     hasNewUpdate: Boolean,
     onClick: () -> Unit,
 ) {
-    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
-    val borderColor = if (isDark) {
-        MaterialTheme.colorScheme.outline.copy(alpha = 0.42f)
-    } else {
-        MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
-    }
-
-    Box {
-        Surface(
-            onClick = onClick,
-            shape = RoundedCornerShape(13.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(0.85.dp, borderColor),
-            shadowElevation = if (isDark) 0.dp else 2.dp,
-            modifier = Modifier.height(38.dp),
-        ) {
-            Row(
-                modifier = Modifier.padding(start = 11.dp, end = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                ZaiMonogramMark(size = 20.dp)
-                Box(
-                    modifier = Modifier
-                        .width(0.75.dp)
-                        .height(13.dp)
-                        .background(MaterialTheme.colorScheme.outlineVariant),
-                )
-                Icon(
-                    Icons.Rounded.Tune,
-                    contentDescription = "打开设置",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(14.dp),
-                )
-            }
-        }
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        ZaiMonogramMark(size = 22.dp)
         if (hasNewUpdate) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 4.dp, end = 4.dp)
-                    .size(6.5.dp)
+                    .padding(top = 5.dp, end = 5.dp)
+                    .size(6.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primary),
             )
@@ -802,24 +755,14 @@ private fun HeaderSquareTrigger(
     contentDescription: String,
     icon: @Composable () -> Unit,
 ) {
-    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
-    val borderColor = if (isDark) {
-        MaterialTheme.colorScheme.outlineVariant
-    } else {
-        MaterialTheme.colorScheme.outline.copy(alpha = 0.24f)
-    }
-
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(13.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(0.75.dp, borderColor),
-        shadowElevation = if (isDark) 0.dp else 1.5.dp,
-        modifier = Modifier.size(38.dp),
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            icon()
-        }
+        icon()
     }
 }
 
@@ -891,88 +834,40 @@ private fun ComposerControlPill(
 
 @Composable
 private fun EditorialEmptyCanvas(
-    statusLine: String,
-    onPickPrompt: (String) -> Unit,
+    piReady: Boolean,
 ) {
-    val starters = remember {
-        listOf(
-            "打开系统设置，查看当前剩余存储空间",
-            "打开高德地图，搜索附近的咖啡店",
-            "读取当前屏幕，告诉我上面有哪些按钮",
-        )
-    }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 16.dp),
+            .padding(horizontal = 32.dp),
         verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ZaiEmblemMark(size = 50.dp)
+        ZaiEmblemMark(size = 46.dp)
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(22.dp))
 
         Text(
-            text = "你想让手机做什么",
+            text = "有什么可以帮你？",
             style = MaterialTheme.typography.displaySmall,
             color = MaterialTheme.colorScheme.onBackground,
         )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = statusLine,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
 
-        Spacer(Modifier.height(32.dp))
-
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(0.5.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant),
+        if (!piReady) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "启动中…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            starters.forEach { sample ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onPickPrompt(sample) }
-                        .padding(vertical = 15.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = sample,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.88f),
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Icon(
-                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(0.5.dp)
-                        .background(MaterialTheme.colorScheme.outlineVariant),
-                )
-            }
         }
     }
 }
 
 @Composable
 private fun UserBubble(text: String) {
-    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
-    val bubbleBg = if (isDark) Color(0xFF1D2432) else MaterialTheme.colorScheme.onBackground
-    val bubbleFg = if (isDark) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.background
-    val border = if (isDark) BorderStroke(0.5.dp, Color(0xFF2C3649)) else null
+    val bubbleBg = MaterialTheme.colorScheme.surfaceVariant
+    val bubbleFg = MaterialTheme.colorScheme.onSurface
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -987,8 +882,7 @@ private fun UserBubble(text: String) {
             ),
             color = bubbleBg,
             contentColor = bubbleFg,
-            border = border,
-            modifier = Modifier.widthIn(max = 286.dp),
+            modifier = Modifier.widthIn(max = 290.dp),
         ) {
             Text(
                 text = text,

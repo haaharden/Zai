@@ -123,7 +123,7 @@ class FloatingCapsuleController(
             dotView?.alpha = 1f
             dotView?.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.rgb(60, 196, 155))
+                setColor(Color.rgb(94, 179, 132))
             }
             labelView?.text = "已完成，点此返回"
             stopButtonView?.visibility = View.GONE
@@ -196,7 +196,7 @@ class FloatingCapsuleController(
     private fun applyRunningChrome() {
         dotView?.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(Color.rgb(112, 144, 255))
+            setColor(Color.rgb(217, 119, 87))
         }
         startDotPulse()
         labelView?.text = "正在操作手机"
@@ -286,8 +286,8 @@ class FloatingCapsuleController(
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dp(24).toFloat()
-                setColor(Color.argb(238, 14, 17, 23))
-                setStroke(dp(1), Color.argb(110, 112, 144, 255))
+                setColor(Color.argb(240, 29, 28, 25))
+                setStroke(dp(1), Color.argb(120, 217, 119, 87))
             }
             elevation = dp(10).toFloat()
         }
@@ -295,7 +295,7 @@ class FloatingCapsuleController(
         val pulseDot = View(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.rgb(112, 144, 255))
+                setColor(Color.rgb(217, 119, 87))
             }
             layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply {
                 marginEnd = dp(9)
@@ -304,7 +304,7 @@ class FloatingCapsuleController(
 
         val statusLabel = TextView(context).apply {
             text = "正在操作手机"
-            setTextColor(Color.rgb(242, 245, 250))
+            setTextColor(Color.rgb(243, 241, 234))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             paint.isFakeBoldText = true
             layoutParams = LinearLayout.LayoutParams(
@@ -317,14 +317,14 @@ class FloatingCapsuleController(
 
         val stopBtn = TextView(context).apply {
             text = "停止"
-            setTextColor(Color.rgb(255, 242, 242))
+            setTextColor(Color.rgb(255, 246, 244))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             paint.isFakeBoldText = true
             setPadding(dp(11), dp(5), dp(11), dp(5))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dp(16).toFloat()
-                setColor(Color.argb(225, 201, 59, 59))
+                setColor(Color.argb(230, 192, 68, 56))
             }
             setOnClickListener { onStopRequested() }
         }
@@ -417,12 +417,12 @@ private class EdgeGlowView(context: Context) : View(context) {
     private val outerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 7f * density
-        color = Color.argb(56, 112, 144, 255)
+        color = Color.argb(56, 217, 119, 87)
     }
     private val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 2f * density
-        color = Color.argb(210, 112, 144, 255)
+        color = Color.argb(215, 217, 119, 87)
     }
     private val rect = RectF()
     private val cornerRadius = 34f * density
@@ -463,11 +463,11 @@ private class TapRippleView(context: Context) : View(context) {
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 2.5f * density
-        color = Color.rgb(91, 139, 255)
+        color = Color.rgb(217, 119, 87)
     }
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.argb(170, 91, 139, 255)
+        color = Color.argb(175, 217, 119, 87)
     }
     private var progress = 0f
 
