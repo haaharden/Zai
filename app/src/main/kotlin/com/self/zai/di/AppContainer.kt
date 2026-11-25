@@ -142,6 +142,7 @@ class AppContainer(context: Context) {
             shizukuBridge.restoreAccessibilityService(component)
         },
         onDismissAssistantOverlay = { AssistantContextBridge.requestDismissOverlay() },
+        isOverlayVisible = { AssistantContextBridge.isOverlayVisible },
     ).also { coordinatorRef = it }
 
     fun startRuntime() {

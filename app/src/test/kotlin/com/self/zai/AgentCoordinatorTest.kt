@@ -170,6 +170,88 @@ class AgentCoordinatorTest {
         assertEquals("剩余 128 GB", lastReply.text)
     }
 
+    @Test
+    fun coordinator_midRunFollowUp_preservesOrderAndOnDemandForegroundService() = runBlocking {
+        val repo = InMemorySessionRepository()
+        val vault = InMemoryVault()
+        val runtime = FakeAgentRuntime()
+        val chrome = FakeChromeHost()
+        val navigator = FakeReturnNavigator(shouldSucceed = true)
+
+        val solModel = ModelOption(
+            providerId = "openai-codex",
+            providerName = "ChatGPT Codex",
+            id = "gpt-6.2-sol",
+            name = "GPT-6.2 Sol",
+            contextWindow = 500_000,
+            supportsImages = true,
+            thinkingLevels = listOf("minimal", "high"),
+        )
+        runtime.setProviders(
+            listOf(
+                ProviderStatus(
+                    id = "openai-codex",
+                    name = "ChatGPT Codex",
+                    credentialType = "oauth",
+                    isCustom = false,
+                    supportsOAuth = true,
+                    models = listOf(solModel),
+                ),
+            ),
+        )
+
+        val phoneController = PhoneController(repo, StubDeviceChannel(), StubAppDirectory())
+        val fakeMcp = StubMcpClient()
+        val dispatcher = AgentToolDispatcher(repo, vault, phoneController, fakeMcp)
+        lateinit var coordinator: AgentCoordinator
+        val modelSelection = ModelSelectionManager(repo, vault, runtime) { coordinator.invalidateSessionConfig(it) }
+        coordinator = AgentCoordinator(
+            repository = repo,
+            credentialVault = vault,
+            runtime = runtime,
+            phoneController = phoneController,
+            toolDispatcher = dispatcher,
+            mcpClient = fakeMcp,
+            modelSelection = modelSelection,
+            returnNavigator = navigator,
+            chromeHost = chrome,
+            mainDispatcher = Dispatchers.Unconfined,
+        )
+
+        // Foreground plain chat must NOT spin up foreground service
+        assertTrue(coordinator.sendUserMessage("第一句提问").isSuccess)
+        assertEquals(0, chrome.fgsStartCount)
+
+        val sid = coordinator.activeSessionId.value
+        runtime.emit(PiSessionEvent.TextDelta(sid, "第一段回答"))
+
+        // User steers mid-run -> new assistant turn must appear BELOW the follow-up user message
+        assertTrue(coordinator.sendUserMessage("补充一下要求").isSuccess)
+        runtime.emit(PiSessionEvent.TextDelta(sid, "收到，按补充要求回答"))
+        runtime.emit(PiSessionEvent.Idle(sid))
+
+        val msgs = coordinator.currentSession().messages
+        assertEquals(4, msgs.size)
+        assertEquals(MessageRole.USER, msgs[0].role)
+        assertEquals("第一句提问", msgs[0].text)
+        assertEquals(MessageRole.ASSISTANT, msgs[1].role)
+        assertEquals("第一段回答", msgs[1].text)
+        assertEquals(MessageRole.USER, msgs[2].role)
+        assertEquals("补充一下要求", msgs[2].text)
+        assertEquals(MessageRole.ASSISTANT, msgs[3].role)
+        assertEquals("收到，按补充要求回答", msgs[3].text)
+        assertEquals(0, chrome.fgsStartCount)
+        assertEquals(0, chrome.fgsStopCount)
+
+        // Start a run, then background the app -> FGS must start and later stop on Idle
+        assertTrue(coordinator.sendUserMessage("后台长任务").isSuccess)
+        assertEquals(0, chrome.fgsStartCount)
+        coordinator.isAppInForeground = false
+        assertEquals(1, chrome.fgsStartCount)
+        runtime.emit(PiSessionEvent.Idle(sid))
+        assertEquals(1, chrome.fgsStopCount)
+    }
+
     private class InMemorySessionRepository : SessionRepository {
         private val _settings = MutableStateFlow(AppSettings())
         override val settings: StateFlow<AppSettings> = _settings
@@ -255,11 +337,13 @@ class AgentCoordinatorTest {
         var dismissedCount = 0
         var completedBannerShown = false
         var lastFallbackSummary = ""
+        var fgsStartCount = 0
+        var fgsStopCount = 0
         override fun showOperatingOverlay(showCapsule: Boolean, showEdgeGlow: Boolean) {}
         override fun showCompletedBanner() { completedBannerShown = true }
         override fun dismissOverlay() { dismissedCount++ }
-        override fun updateForegroundStatus(status: String) {}
-        override fun stopForegroundService() {}
+        override fun updateForegroundStatus(status: String) { fgsStartCount++ }
+        override fun stopForegroundService() { fgsStopCount++ }
         override fun postFinishedFallbackNotification(summary: String) { lastFallbackSummary = summary }
     }
 

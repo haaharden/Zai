@@ -23,6 +23,11 @@ class ZaiAssistTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+        if (AssistantContextBridge.shouldToggleDismissOnReinvoke()) {
+            AssistantContextBridge.requestDismissOverlay()
+            return
+        }
+        AssistantContextBridge.clearScreenContext()
         val svc = ZaiAccessibilityService.instance
         if (svc != null) {
             val dm = resources.displayMetrics

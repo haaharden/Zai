@@ -30,6 +30,14 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
+        // Single-handed toggle: holding Power 0.5s while the overlay is already open dismisses it.
+        if (AssistantContextBridge.shouldToggleDismissOnReinvoke()) {
+            AssistantContextBridge.requestDismissOverlay()
+            hide()
+            return
+        }
+        // Always discard any previous app's snapshot before capturing the current foreground screen.
+        AssistantContextBridge.clearScreenContext()
         captureForegroundViaAccessibility()
 
         val intent = Intent(context, ZaiAssistActivity::class.java).apply {

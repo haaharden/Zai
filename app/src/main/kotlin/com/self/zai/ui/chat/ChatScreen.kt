@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -33,12 +34,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
@@ -46,8 +46,10 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -73,6 +75,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
@@ -82,6 +85,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import com.self.zai.assistant.VoiceListenState
 import com.self.zai.model.ChatMessage
 import com.self.zai.model.ChatSession
 import com.self.zai.model.MessageRole
@@ -92,8 +96,10 @@ import com.self.zai.model.SkillEntry
 import com.self.zai.model.StepState
 import com.self.zai.model.ThinkingLevelDisplay
 import com.self.zai.shell.ShizukuStatus
+import com.self.zai.ui.components.ZaiCopyIconButton
 import com.self.zai.ui.components.ZaiEmblemMark
 import com.self.zai.ui.components.ZaiInsetDivider
+import com.self.zai.ui.components.ZaiMarkdownText
 import com.self.zai.ui.components.ZaiModelPickerSheet
 import com.self.zai.ui.components.ZaiMonogramMark
 import com.self.zai.ui.components.ZaiThinkingPickerSheet
@@ -114,6 +120,11 @@ fun ChatScreen(
     accessibilityConnected: Boolean,
     hasNewUpdate: Boolean,
     pendingConfirmation: PendingConfirmation?,
+    inputText: String,
+    onInputTextChange: (String) -> Unit,
+    voiceListenState: VoiceListenState,
+    onToggleVoiceInput: () -> Unit,
+    onCancelVoiceInput: () -> Unit,
     onSendMessage: (String) -> Unit,
     onStopRun: () -> Unit,
     onSelectSession: (String) -> Unit,
@@ -125,7 +136,6 @@ fun ChatScreen(
     onOpenSettings: () -> Unit,
     onResolveConfirmation: (callId: String, allow: Boolean) -> Unit,
 ) {
-    var inputText by remember { mutableStateOf("") }
     var showSessionsSheet by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showThinkingPicker by remember { mutableStateOf(false) }
@@ -405,7 +415,7 @@ fun ChatScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { inputText = "/${skill.name} " }
+                            .clickable { onInputTextChange("/${skill.name} ") }
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -467,10 +477,18 @@ fun ChatScreen(
         }
 
         // Sculpted floating composer dock
+        val isVoiceListening = voiceListenState == VoiceListenState.LISTENING
         Surface(
             shape = RoundedCornerShape(26.dp),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+            border = BorderStroke(
+                width = if (isVoiceListening) 1.dp else 0.5.dp,
+                color = if (isVoiceListening) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant
+                },
+            ),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
@@ -488,20 +506,37 @@ fun ChatScreen(
                 ) {
                     if (inputText.isEmpty()) {
                         Text(
-                            text = if (isRunning) "输入可随时补充…" else "问 Zai…",
+                            text = when {
+                                isVoiceListening -> "聆听中…"
+                                isRunning -> "输入可随时补充…"
+                                else -> "问 Zai…"
+                            },
                             style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                            color = if (isVoiceListening) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                            },
                         )
                     }
                     BasicTextField(
                         value = inputText,
-                        onValueChange = { inputText = it },
+                        onValueChange = { next ->
+                            if (isVoiceListening) onCancelVoiceInput()
+                            onInputTextChange(next)
+                        },
                         textStyle = MaterialTheme.typography.bodyLarge.copy(
                             color = MaterialTheme.colorScheme.onSurface,
                         ),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         maxLines = 5,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { state ->
+                                if (state.isFocused && isVoiceListening) {
+                                    onCancelVoiceInput()
+                                }
+                            },
                     )
                 }
 
@@ -525,14 +560,22 @@ fun ChatScreen(
                     }
                 }
 
-                if (!isRunning || inputText.isNotBlank()) {
-                    if (isRunning) Spacer(Modifier.width(6.dp))
-                    val canSend = inputText.isNotBlank() && piReady
+                if (!isRunning && (inputText.isBlank() || isVoiceListening)) {
+                    ChatMicButton(
+                        listening = isVoiceListening,
+                        onClick = onToggleVoiceInput,
+                    )
+                }
+
+                if (inputText.isNotBlank()) {
+                    if (isRunning || isVoiceListening) Spacer(Modifier.width(6.dp))
+                    val canSend = piReady
                     Surface(
                         onClick = {
                             if (canSend) {
+                                if (isVoiceListening) onCancelVoiceInput()
                                 val toSend = inputText
-                                inputText = ""
+                                onInputTextChange("")
                                 autoFollowBottom = true
                                 onSendMessage(toSend)
                                 scope.launch {
@@ -624,63 +667,69 @@ fun ChatScreen(
                     }
                 }
                 Spacer(Modifier.height(6.dp))
-                allSessions.forEachIndexed { idx, item ->
-                    val selected = item.id == session.id
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                if (selected) MaterialTheme.colorScheme.surfaceContainerLow
-                                else Color.Transparent,
-                            )
-                            .clickable {
-                                onSelectSession(item.id)
-                                showSessionsSheet = false
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp),
+                ) {
+                    itemsIndexed(allSessions, key = { _, item -> item.id }) { idx, item ->
+                        val selected = item.id == session.id
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (selected) MaterialTheme.colorScheme.surfaceContainerLow
+                                    else Color.Transparent,
+                                )
+                                .clickable {
+                                    onSelectSession(item.id)
+                                    showSessionsSheet = false
+                                }
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (selected) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary),
+                                )
+                                Spacer(Modifier.width(10.dp))
                             }
-                            .padding(horizontal = 12.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (selected) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary),
-                            )
-                            Spacer(Modifier.width(10.dp))
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = item.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = "${item.messages.size} 条记录",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (allSessions.size > 1) {
-                            IconButton(
-                                onClick = { onDeleteSession(item.id) },
-                                modifier = Modifier.size(32.dp),
-                            ) {
-                                Icon(
-                                    Icons.Rounded.DeleteOutline,
-                                    contentDescription = "删除对话",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp),
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = item.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "${item.messages.size} 条记录",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+                            if (allSessions.size > 1) {
+                                IconButton(
+                                    onClick = { onDeleteSession(item.id) },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.DeleteOutline,
+                                        contentDescription = "删除对话",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
                         }
-                    }
-                    if (idx < allSessions.lastIndex) {
-                        ZaiInsetDivider()
+                        if (idx < allSessions.lastIndex) {
+                            ZaiInsetDivider()
+                        }
                     }
                 }
                 Spacer(Modifier.height(22.dp))
@@ -983,10 +1032,10 @@ private fun AssistantTurn(
         }
 
         if (message.text.isNotBlank()) {
-            Text(
-                text = message.text,
-                style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 25.sp),
-                color = if (message.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground,
+            ZaiMarkdownText(
+                markdown = message.text,
+                textColor = if (message.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground,
+                baseTextStyle = MaterialTheme.typography.bodyLarge.copy(lineHeight = 25.sp),
             )
             if (isActiveTurn && !hasRunningPhoneStep && liveStepLabel.isNotBlank() && liveStepLabel != "思考中…" && liveStepLabel != "正在操作手机") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -997,6 +1046,13 @@ private fun AssistantTurn(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            } else if (!isActiveTurn) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Start,
+                ) {
+                    ZaiCopyIconButton(textToCopy = message.text)
                 }
             }
         } else if (isActiveTurn && message.steps.isEmpty()) {
@@ -1032,4 +1088,49 @@ private fun PulsingDot(color: Color) {
             .clip(CircleShape)
             .background(color),
     )
+}
+
+@Composable
+private fun ChatMicButton(
+    listening: Boolean,
+    onClick: () -> Unit,
+) {
+    val pulse = if (listening) {
+        val transition = rememberInfiniteTransition(label = "chatMicPulse")
+        val alpha by transition.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
+            label = "chatMicAlpha",
+        )
+        alpha
+    } else {
+        1f
+    }
+
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = if (listening) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
+        contentColor = if (listening) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        modifier = Modifier.size(38.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = if (listening) Icons.Rounded.GraphicEq else Icons.Rounded.Mic,
+                contentDescription = if (listening) "停止语音" else "语音输入",
+                modifier = Modifier
+                    .size(19.dp)
+                    .alpha(pulse),
+            )
+        }
+    }
 }

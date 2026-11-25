@@ -60,10 +60,14 @@ class AgentCoordinator(
     private val onStartRuntimeExtra: () -> Unit = {},
     private val onRepairAccessibility: suspend () -> Result<Unit> = { Result.failure(UnsupportedOperationException()) },
     private val onDismissAssistantOverlay: () -> Unit = {},
+    private val isOverlayVisible: () -> Boolean = { false },
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
     private val configuredSessions = ConcurrentHashMap<String, String>() // sessionId -> "provider/model/thinking"
+
+    @Volatile
+    private var foregroundServiceActive: Boolean = false
 
     private val _activeSessionId = MutableStateFlow(ensureInitialSession().id)
     val activeSessionId: StateFlow<String> = _activeSessionId.asStateFlow()
@@ -83,8 +87,27 @@ class AgentCoordinator(
             }
             if (!value) {
                 repository.flushNow()
+                onUiBackgroundedIfRunning()
             }
         }
+
+    fun onUiBackgroundedIfRunning() {
+        if (_isRunning.value && !isAppInForeground && !isOverlayVisible()) {
+            ensureForegroundServiceRunning(_liveStepLabel.value.ifBlank { "正在后台处理请求" })
+        }
+    }
+
+    private fun ensureForegroundServiceRunning(status: String) {
+        foregroundServiceActive = true
+        chromeHost.updateForegroundStatus(status)
+    }
+
+    private fun stopForegroundServiceIfActive() {
+        if (foregroundServiceActive) {
+            foregroundServiceActive = false
+            chromeHost.stopForegroundService()
+        }
+    }
 
     init {
         runtime.toolHandler = toolDispatcher
@@ -302,7 +325,7 @@ class AgentCoordinator(
                 showEdgeGlow = s.showEdgeGlow,
             )
         }
-        chromeHost.updateForegroundStatus("正在操作手机")
+        ensureForegroundServiceRunning("正在操作手机")
     }
 
     fun sendUserMessage(rawText: String, extraContextForModel: String? = null): Result<Unit> {
@@ -359,12 +382,31 @@ class AgentCoordinator(
         }
 
         if (_isRunning.value) {
+            val followUpPlaceholder = ChatMessage(
+                id = "m_${UUID.randomUUID().toString().take(8)}",
+                role = MessageRole.ASSISTANT,
+                text = "",
+            )
             updateSession(sessionId, flushImmediately = true) { s ->
+                val baseMessages = s.messages.toMutableList()
+                // Drop an untouched empty assistant placeholder if user followed up before any token arrived
+                val trailing = baseMessages.lastOrNull()
+                if (trailing != null &&
+                    trailing.role == MessageRole.ASSISTANT &&
+                    trailing.text.isBlank() &&
+                    trailing.thinking.isBlank() &&
+                    trailing.steps.isEmpty()
+                ) {
+                    baseMessages.removeAt(baseMessages.lastIndex)
+                }
+                baseMessages.add(userMsg)
+                baseMessages.add(followUpPlaceholder)
                 s.copy(
                     updatedAtMs = System.currentTimeMillis(),
-                    messages = s.messages + userMsg,
+                    messages = baseMessages,
                 )
             }
+            _liveStepLabel.value = "思考中…"
             runtime.prompt(sessionId, promptForPi)
             return Result.success(Unit)
         }
@@ -405,7 +447,10 @@ class AgentCoordinator(
 
         _isRunning.value = true
         _liveStepLabel.value = "思考中…"
-        chromeHost.updateForegroundStatus("正在处理请求")
+        // Only elevate to a foreground service on demand (phone automation or backgrounded run)
+        if (!isAppInForeground && !isOverlayVisible()) {
+            ensureForegroundServiceRunning("正在后台处理请求")
+        }
         runtime.prompt(sessionId, promptForPi)
         return Result.success(Unit)
     }
@@ -417,7 +462,7 @@ class AgentCoordinator(
         _isRunning.value = false
         _liveStepLabel.value = ""
         chromeHost.dismissOverlay()
-        chromeHost.stopForegroundService()
+        stopForegroundServiceIfActive()
         updateLastAssistantMessage(sessionId, flushImmediately = true) { msg ->
             val closedSteps = msg.steps.map {
                 if (it.state == StepState.RUNNING) it.copy(state = StepState.ERROR, detail = "已停止") else it
@@ -448,7 +493,7 @@ class AgentCoordinator(
 
         if (!shouldReturn) {
             chromeHost.dismissOverlay()
-            chromeHost.stopForegroundService()
+            stopForegroundServiceIfActive()
             return
         }
 
@@ -460,7 +505,7 @@ class AgentCoordinator(
 
         scope.launch {
             val returned = returnNavigator.attemptBringToFront { isAppInForeground }
-            chromeHost.stopForegroundService()
+            stopForegroundServiceIfActive()
             if (returned) {
                 chromeHost.dismissOverlay()
             } else {
@@ -490,7 +535,7 @@ class AgentCoordinator(
                             _isRunning.value = false
                             _liveStepLabel.value = ""
                             chromeHost.dismissOverlay()
-                            chromeHost.stopForegroundService()
+                            stopForegroundServiceIfActive()
                             updateLastAssistantMessage(activeId, flushImmediately = true) { msg ->
                                 val closed = msg.steps.map {
                                     if (it.state == StepState.RUNNING) it.copy(state = StepState.ERROR) else it
@@ -545,17 +590,24 @@ class AgentCoordinator(
 
                     is PiSessionEvent.ToolEnd -> {
                         val firstLine = event.output.lineSequence().firstOrNull()?.take(80).orEmpty()
-                        updateLastAssistantMessage(event.sessionId, flushImmediately = false) { msg ->
-                            val idx = msg.steps.indexOfLast { it.tool == event.tool && it.state == StepState.RUNNING }
-                            if (idx < 0) {
-                                msg
+                        updateSession(event.sessionId, flushImmediately = false) { s ->
+                            val list = s.messages.toMutableList()
+                            val msgIdx = list.indexOfLast { m ->
+                                m.role == MessageRole.ASSISTANT &&
+                                    m.steps.any { it.tool == event.tool && it.state == StepState.RUNNING }
+                            }
+                            if (msgIdx < 0) {
+                                s
                             } else {
+                                val msg = list[msgIdx]
+                                val stepIdx = msg.steps.indexOfLast { it.tool == event.tool && it.state == StepState.RUNNING }
                                 val nextSteps = msg.steps.toMutableList()
-                                nextSteps[idx] = nextSteps[idx].copy(
+                                nextSteps[stepIdx] = nextSteps[stepIdx].copy(
                                     state = if (event.isError) StepState.ERROR else StepState.DONE,
                                     detail = firstLine,
                                 )
-                                msg.copy(steps = nextSteps)
+                                list[msgIdx] = msg.copy(steps = nextSteps)
+                                s.copy(messages = list, updatedAtMs = System.currentTimeMillis())
                             }
                         }
                     }
@@ -629,9 +681,9 @@ class AgentCoordinator(
     ) {
         updateSession(sessionId, flushImmediately = flushImmediately) { s ->
             val list = s.messages.toMutableList()
-            val idx = list.indexOfLast { it.role == MessageRole.ASSISTANT }
-            if (idx >= 0) {
-                list[idx] = transform(list[idx])
+            val last = list.lastOrNull()
+            if (last != null && last.role == MessageRole.ASSISTANT) {
+                list[list.lastIndex] = transform(last)
             } else {
                 list.add(
                     transform(

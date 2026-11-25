@@ -59,47 +59,49 @@ class SettingsStore(
     private var pendingSessionsFlushJob: Job? = null
 
     @Volatile
+    private var settingsDirty: Boolean = false
+
+    @Volatile
     private var sessionsDirty: Boolean = false
 
     override fun updateSettings(transform: (AppSettings) -> AppSettings): AppSettings {
         val next = synchronized(stateLock) {
             val updated = transform(_settings.value)
             _settings.value = updated
+            settingsDirty = true
             updated
         }
-        ioScope.launch { writeSettingsAtomic(next) }
+        ioScope.launch { writeLatestSettingsAtomic() }
         return next
     }
 
     override fun upsertSession(session: ChatSession, flushImmediately: Boolean) {
-        val sorted = synchronized(stateLock) {
+        synchronized(stateLock) {
             val current = _sessions.value.toMutableList()
             val idx = current.indexOfFirst { it.id == session.id }
             if (idx >= 0) current[idx] = session else current.add(0, session)
             val result = current.sortedByDescending { it.updatedAtMs }.take(MAX_STORED_SESSIONS)
             _sessions.value = result
             sessionsDirty = true
-            result
         }
         if (flushImmediately) {
             pendingSessionsFlushJob?.cancel()
             pendingSessionsFlushJob = null
-            ioScope.launch { writeSessionsAtomic(sorted) }
+            ioScope.launch { writeLatestSessionsAtomic() }
         } else {
             scheduleSessionsFlush()
         }
     }
 
     override fun deleteSession(sessionId: String) {
-        val next = synchronized(stateLock) {
+        synchronized(stateLock) {
             val filtered = _sessions.value.filterNot { it.id == sessionId }
             _sessions.value = filtered
             sessionsDirty = true
-            filtered
         }
         pendingSessionsFlushJob?.cancel()
         pendingSessionsFlushJob = null
-        ioScope.launch { writeSessionsAtomic(next) }
+        ioScope.launch { writeLatestSessionsAtomic() }
     }
 
     override fun createNewSession(): ChatSession {
@@ -113,21 +115,18 @@ class SettingsStore(
     }
 
     override fun flushNow() {
-        val snapshot = synchronized(stateLock) {
-            if (!sessionsDirty) return
-            _sessions.value
-        }
+        val needsFlush = synchronized(stateLock) { sessionsDirty }
+        if (!needsFlush) return
         pendingSessionsFlushJob?.cancel()
         pendingSessionsFlushJob = null
-        ioScope.launch { writeSessionsAtomic(snapshot) }
+        ioScope.launch { writeLatestSessionsAtomic() }
     }
 
     private fun scheduleSessionsFlush() {
         pendingSessionsFlushJob?.cancel()
         pendingSessionsFlushJob = ioScope.launch {
             delay(sessionDebounceMs)
-            val snapshot = synchronized(stateLock) { _sessions.value }
-            writeSessionsAtomic(snapshot)
+            writeLatestSessionsAtomic()
         }
     }
 
@@ -141,13 +140,28 @@ class SettingsStore(
             json.decodeFromString<List<ChatSession>>(raw)
         } ?: emptyList()
 
-    private fun writeSettingsAtomic(value: AppSettings) {
-        writeAtomic(settingsFile, settingsBackupFile, json.encodeToString(value))
+    private fun writeLatestSettingsAtomic() {
+        synchronized(fileWriteLock) {
+            val snapshot = synchronized(stateLock) {
+                if (!settingsDirty) return
+                settingsDirty = false
+                _settings.value
+            }
+            val ok = writeAtomicUnlocked(settingsFile, settingsBackupFile, json.encodeToString(snapshot))
+            if (!ok) synchronized(stateLock) { settingsDirty = true }
+        }
     }
 
-    private fun writeSessionsAtomic(value: List<ChatSession>) {
-        synchronized(stateLock) { sessionsDirty = false }
-        writeAtomic(sessionsFile, sessionsBackupFile, json.encodeToString(value))
+    private fun writeLatestSessionsAtomic() {
+        synchronized(fileWriteLock) {
+            val snapshot = synchronized(stateLock) {
+                if (!sessionsDirty) return
+                sessionsDirty = false
+                _sessions.value
+            }
+            val ok = writeAtomicUnlocked(sessionsFile, sessionsBackupFile, json.encodeToString(snapshot))
+            if (!ok) synchronized(stateLock) { sessionsDirty = true }
+        }
     }
 
     private fun <T> readWithBackupFallback(primary: File, backup: File, decode: (String) -> T): T? {
@@ -161,23 +175,21 @@ class SettingsStore(
         return null
     }
 
-    private fun writeAtomic(target: File, backup: File, payload: String) {
-        synchronized(fileWriteLock) {
-            runCatching {
-                target.parentFile?.mkdirs()
-                val tmp = File(target.parentFile, "${target.name}.tmp")
-                tmp.writeText(payload, Charsets.UTF_8)
-                if (target.exists()) {
-                    runCatching { target.copyTo(backup, overwrite = true) }
-                }
-                if (!tmp.renameTo(target)) {
-                    // Fallback on filesystems where rename over existing target fails
-                    tmp.copyTo(target, overwrite = true)
-                    tmp.delete()
-                }
+    private fun writeAtomicUnlocked(target: File, backup: File, payload: String): Boolean =
+        runCatching {
+            target.parentFile?.mkdirs()
+            val tmp = File(target.parentFile, "${target.name}.tmp")
+            tmp.writeText(payload, Charsets.UTF_8)
+            if (target.exists()) {
+                runCatching { target.copyTo(backup, overwrite = true) }
             }
-        }
-    }
+            if (!tmp.renameTo(target)) {
+                // Fallback on filesystems where rename over existing target fails
+                tmp.copyTo(target, overwrite = true)
+                tmp.delete()
+            }
+            true
+        }.getOrDefault(false)
 
     companion object {
         private const val MAX_STORED_SESSIONS = 40

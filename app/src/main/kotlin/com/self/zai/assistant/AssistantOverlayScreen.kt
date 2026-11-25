@@ -33,6 +33,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
@@ -56,9 +58,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,11 +70,13 @@ import com.self.zai.model.ChatMessage
 import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
 import com.self.zai.model.PendingConfirmation
+import com.self.zai.ui.components.ZaiCopyIconButton
+import com.self.zai.ui.components.ZaiMarkdownText
 import com.self.zai.ui.components.ZaiMonogramMark
 
 /**
- * Ultra-clean Inkstone & Glacier Silk floating personal assistant bottom card.
- * Appears smoothly over any foreground app without leaving it; tap scrim to dismiss.
+ * Warm minimalist Anthropic-styled floating personal assistant bottom card.
+ * Appears smoothly over any foreground app without leaving it; tap scrim or lock screen to dismiss.
  */
 @Composable
 fun AssistantOverlayScreen(
@@ -83,6 +89,7 @@ fun AssistantOverlayScreen(
     isSpeaking: Boolean,
     inputText: String,
     onInputChange: (String) -> Unit,
+    onCancelMic: () -> Unit,
     attachScreen: Boolean,
     capturedScreen: CapturedScreenContext?,
     onToggleAttachScreen: () -> Unit,
@@ -99,7 +106,6 @@ fun AssistantOverlayScreen(
 ) {
     val scrollState = rememberScrollState()
     val lastAssistant = overlayMessages.lastOrNull { it.role == MessageRole.ASSISTANT }
-    val lastUser = overlayMessages.lastOrNull { it.role == MessageRole.USER }
 
     LaunchedEffect(overlayMessages.size, lastAssistant?.text?.length, isRunning) {
         if (overlayMessages.isNotEmpty()) {
@@ -266,43 +272,79 @@ fun AssistantOverlayScreen(
                         }
                     }
 
-                    // Compact scrollable turn preview (only shown once the user sends something)
+                    // Multi-turn scrollable conversation preview for the active overlay session
                     if (overlayMessages.isNotEmpty() || isRunning) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 320.dp)
+                                .heightIn(max = 340.dp)
                                 .verticalScroll(scrollState),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            if (lastUser != null) {
-                                Text(
-                                    text = lastUser.text,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                            overlayMessages.forEachIndexed { idx, msg ->
+                                val isLatestMsg = idx == overlayMessages.lastIndex
+                                when (msg.role) {
+                                    MessageRole.USER -> {
+                                        if (idx > 0) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(0.5.dp)
+                                                    .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                                            )
+                                        }
+                                        Text(
+                                            text = msg.text,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 4,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+
+                                    MessageRole.ASSISTANT -> {
+                                        val isActiveAssistant = isRunning && isLatestMsg
+                                        if (isActiveAssistant && msg.text.isBlank()) {
+                                            OverlayLiveStatusRow(label = liveStepLabel.ifBlank { "思考中…" })
+                                        } else {
+                                            if (isActiveAssistant && liveStepLabel.isNotBlank() && liveStepLabel != "思考中…") {
+                                                OverlayLiveStatusRow(label = liveStepLabel)
+                                            }
+                                            if (msg.text.isNotBlank()) {
+                                                ZaiMarkdownText(
+                                                    markdown = msg.text,
+                                                    textColor = if (msg.isError) {
+                                                        MaterialTheme.colorScheme.error
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurface
+                                                    },
+                                                    baseTextStyle = MaterialTheme.typography.bodyLarge.copy(lineHeight = 23.sp),
+                                                )
+                                                if (!isActiveAssistant) {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.End,
+                                                    ) {
+                                                        ZaiCopyIconButton(textToCopy = msg.text)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    MessageRole.SYSTEM_NOTE -> {
+                                        Text(
+                                            text = msg.text,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
                             }
 
-                            if (isRunning && (lastAssistant == null || lastAssistant.text.isBlank())) {
+                            if (isRunning && overlayMessages.isEmpty()) {
                                 OverlayLiveStatusRow(label = liveStepLabel.ifBlank { "思考中…" })
-                            } else if (lastAssistant != null) {
-                                if (isRunning && liveStepLabel.isNotBlank() && liveStepLabel != "思考中…") {
-                                    OverlayLiveStatusRow(label = liveStepLabel)
-                                }
-                                if (lastAssistant.text.isNotBlank()) {
-                                    Text(
-                                        text = lastAssistant.text,
-                                        style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 23.sp),
-                                        color = if (lastAssistant.isError) {
-                                            MaterialTheme.colorScheme.error
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurface
-                                        },
-                                    )
-                                }
                             }
                         }
                     }
@@ -358,6 +400,7 @@ fun AssistantOverlayScreen(
 
                     // Bottom composer row: tonal input + animated Mic + Send/Stop
                     val isListening = listenState == VoiceListenState.LISTENING
+                    val canSend = inputText.isNotBlank() && piReady
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -397,11 +440,23 @@ fun AssistantOverlayScreen(
                                 value = inputText,
                                 onValueChange = onInputChange,
                                 maxLines = 4,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(
+                                    onSend = {
+                                        if (canSend) onSend()
+                                    },
+                                ),
                                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                                     color = MaterialTheme.colorScheme.onSurface,
                                 ),
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .onFocusChanged { state ->
+                                        if (state.isFocused && isListening) {
+                                            onCancelMic()
+                                        }
+                                    },
                             )
                         }
 
@@ -416,7 +471,6 @@ fun AssistantOverlayScreen(
                         Spacer(Modifier.width(6.dp))
 
                         // Send or Stop circle button
-                        val canSend = inputText.isNotBlank() && piReady
                         Box(
                             modifier = Modifier
                                 .size(36.dp)

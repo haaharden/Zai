@@ -29,6 +29,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
+import com.self.zai.assistant.VoiceListenState
+import com.self.zai.assistant.VoiceSpeechController
 import com.self.zai.di.AppContainer
 import com.self.zai.model.ThemeMode
 import com.self.zai.permission.DevicePermissionHelper
@@ -46,9 +48,58 @@ private enum class OverlayRoute { NONE, MODELS, SETTINGS, SKILLS, MCP }
 
 class MainActivity : ComponentActivity() {
 
+    private val chatInputText = mutableStateOf("")
+    private val voiceControllerState = mutableStateOf<VoiceSpeechController?>(null)
+
     private val notificationPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
+
+    private val audioPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            ensureVoiceController().startListening()
+        } else {
+            Toast.makeText(this, "需要麦克风权限才能语音输入", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun ensureVoiceController(): VoiceSpeechController {
+        voiceControllerState.value?.let { return it }
+        return VoiceSpeechController(
+            context = this,
+            enableTts = false,
+            onPartialTranscript = { partial ->
+                chatInputText.value = partial
+            },
+            onFinalTranscript = { finalText ->
+                chatInputText.value = finalText
+            },
+            onErrorMessage = { msg ->
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            },
+        ).also { created ->
+            voiceControllerState.value = created
+        }
+    }
+
+    private fun toggleChatVoiceInput() {
+        val current = voiceControllerState.value
+        if (current != null && current.listenState.value == VoiceListenState.LISTENING) {
+            current.stopListening()
+            return
+        }
+        if (DevicePermissionHelper.hasAudioPermission(this)) {
+            ensureVoiceController().startListening()
+        } else {
+            audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun cancelChatVoiceInput() {
+        voiceControllerState.value?.cancelListening()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,9 +127,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
             ZaiTheme(themeMode = settings.themeMode) {
+                val activeVoiceController = voiceControllerState.value
+                val liveVoiceState = activeVoiceController?.listenState?.collectAsState()?.value
+                    ?: VoiceListenState.IDLE
                 ZaiRoot(
                     app = app,
                     container = app.container,
+                    chatInputText = chatInputText.value,
+                    onChatInputTextChange = { chatInputText.value = it },
+                    voiceListenState = liveVoiceState,
+                    onToggleVoiceInput = { toggleChatVoiceInput() },
+                    onCancelVoiceInput = { cancelChatVoiceInput() },
                     onOpenBrowserUrl = { url -> openAuthUrl(url) },
                     onShowToast = { msg -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() },
                 )
@@ -99,9 +158,16 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        cancelChatVoiceInput()
         val container = (application as ZaiApplication).container
         container.agentCoordinator.isAppInForeground = false
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        voiceControllerState.value?.release()
+        voiceControllerState.value = null
+        super.onDestroy()
     }
 
     private fun openAuthUrl(url: String) {
@@ -122,6 +188,11 @@ class MainActivity : ComponentActivity() {
 private fun ZaiRoot(
     app: ZaiApplication,
     container: AppContainer,
+    chatInputText: String,
+    onChatInputTextChange: (String) -> Unit,
+    voiceListenState: VoiceListenState,
+    onToggleVoiceInput: () -> Unit,
+    onCancelVoiceInput: () -> Unit,
     onOpenBrowserUrl: (String) -> Unit,
     onShowToast: (String) -> Unit,
 ) {
@@ -190,6 +261,11 @@ private fun ZaiRoot(
             accessibilityConnected = accessibilityConnected,
             hasNewUpdate = latestRelease?.isNewer == true,
             pendingConfirmation = pendingConfirmation,
+            inputText = chatInputText,
+            onInputTextChange = onChatInputTextChange,
+            voiceListenState = voiceListenState,
+            onToggleVoiceInput = onToggleVoiceInput,
+            onCancelVoiceInput = onCancelVoiceInput,
             onSendMessage = { text ->
                 coordinator.sendUserMessage(text).onFailure { err ->
                     onShowToast(err.message ?: "无法发送消息")

@@ -7,6 +7,8 @@ import com.self.zai.agent.AgentToolDispatcher
 import com.self.zai.agent.AppReturnNavigator
 import com.self.zai.agent.ModelSelectionManager
 import com.self.zai.agent.RunChromeHost
+import com.self.zai.assistant.AssistantContextBridge
+import com.self.zai.assistant.CapturedScreenContext
 import com.self.zai.assistant.VoiceSpeechController
 import com.self.zai.data.CredentialVault
 import com.self.zai.data.SessionRepository
@@ -189,6 +191,28 @@ class AssistantArchitectureTest {
 
         coordinator.onPhoneOperationStep()
         assertEquals(1, overlayDismissed)
+    }
+
+    @Test
+    fun contextBridge_clearsStaleScreenContext_andDebouncesReinvokeToggle() {
+        AssistantContextBridge.updateScreenContext(
+            CapturedScreenContext(
+                packageName = "com.tencent.mm",
+                appLabel = "微信",
+                summary = "聊天记录",
+                capturedAtMs = 1_000L,
+            ),
+        )
+        assertNotNull(AssistantContextBridge.currentValidScreenContext(nowMs = 5_000L))
+        AssistantContextBridge.clearScreenContext()
+        assertNull(AssistantContextBridge.currentValidScreenContext(nowMs = 5_000L))
+
+        AssistantContextBridge.isOverlayVisible = true
+        AssistantContextBridge.overlayOpenedAtMs = 10_000L
+        assertFalse(AssistantContextBridge.shouldToggleDismissOnReinvoke(nowMs = 10_300L))
+        assertTrue(AssistantContextBridge.shouldToggleDismissOnReinvoke(nowMs = 10_800L))
+        AssistantContextBridge.isOverlayVisible = false
+        assertFalse(AssistantContextBridge.shouldToggleDismissOnReinvoke(nowMs = 12_000L))
     }
 
     private class FakeAssistantBackend : SystemAssistantBackend {

@@ -113,9 +113,15 @@ class ZaiAgentService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
+        val title = if (statusText.contains("操作") || statusText.contains("操控")) {
+            "Zai 正在操控手机"
+        } else {
+            "Zai 正在后台运行"
+        }
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_zai)
-            .setContentTitle("Zai 正在操控手机")
+            .setContentTitle(title)
             .setContentText(statusText)
             .setOngoing(true)
             .setContentIntent(openPending)
@@ -146,6 +152,7 @@ class ZaiAgentService : Service() {
         }
 
         fun stop(context: Context) {
+            if (instance == null) return
             runCatching {
                 val intent = Intent(context, ZaiAgentService::class.java).setAction(ACTION_STOP_SERVICE)
                 context.startService(intent)

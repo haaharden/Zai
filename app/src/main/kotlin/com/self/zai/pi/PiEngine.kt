@@ -21,6 +21,7 @@ import com.self.zai.update.AppUpdater
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -84,6 +86,9 @@ class PiEngine(
 
     @Volatile
     private var readySignal = CompletableDeferred<Unit>()
+
+    @Volatile
+    private var pendingLoginJob: Job? = null
 
     private val nativeHttp = NativeHttp(
         scope = scope,
@@ -164,6 +169,8 @@ class PiEngine(
     }
 
     override fun startChatGptLogin(method: String) {
+        pendingLoginJob?.cancel()
+        pendingLoginJob = null
         _authState.value = AuthUiState.InProgress(
             providerId = PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID,
             statusMessage = if (method == "device_code") {
@@ -176,10 +183,34 @@ class PiEngine(
             .put("provider", PiBridgeCodec.PRIMARY_OAUTH_PROVIDER_ID)
             .put("type", "oauth")
             .put("method", method)
-        callJs("login", payload.toString())
+            .toString()
+
+        if (_isReady.value) {
+            callJs("login", payload)
+            return
+        }
+
+        // Cold-start race guard: wait for Pi WebView initialization instead of dropping the login call
+        pendingLoginJob = scope.launch {
+            val ready = withTimeoutOrNull(15_000L) {
+                readySignal.await()
+                true
+            } ?: false
+            if (!ready || !_isReady.value) {
+                if (_authState.value is AuthUiState.InProgress) {
+                    _authState.value = AuthUiState.Failed("Pi 引擎初始化超时，请稍后重试")
+                }
+                return@launch
+            }
+            if (_authState.value is AuthUiState.InProgress) {
+                callJs("login", payload)
+            }
+        }
     }
 
     override fun cancelLogin() {
+        pendingLoginJob?.cancel()
+        pendingLoginJob = null
         callJsNoArg("cancelLogin")
         loopbackServer.closeAll()
         _authState.value = AuthUiState.Idle
@@ -322,10 +353,15 @@ class PiEngine(
     }
 
     private fun resetRuntimeState(reason: String) {
+        pendingLoginJob?.cancel()
+        pendingLoginJob = null
         _isReady.value = false
         readySignal = CompletableDeferred()
         nativeHttp.cancelAll()
         loopbackServer.closeAll()
+        if (_authState.value is AuthUiState.InProgress) {
+            _authState.value = AuthUiState.Failed("$reason，请重新登录")
+        }
         _events.tryEmit(PiSessionEvent.RuntimeReset(reason))
     }
 

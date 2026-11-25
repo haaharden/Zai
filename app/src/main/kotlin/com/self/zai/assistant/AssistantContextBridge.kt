@@ -36,6 +36,14 @@ object AssistantContextBridge {
     @Volatile
     var isOverlayVisible: Boolean = false
 
+    @Volatile
+    var overlayOpenedAtMs: Long = 0L
+
+    fun shouldToggleDismissOnReinvoke(nowMs: Long = System.currentTimeMillis()): Boolean =
+        isOverlayVisible && (nowMs - overlayOpenedAtMs > REVOKE_TOGGLE_DEBOUNCE_MS)
+
+    private const val REVOKE_TOGGLE_DEBOUNCE_MS = 600L
+
     fun updateScreenContext(context: CapturedScreenContext?) {
         _screenContext.value = context
     }

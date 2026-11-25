@@ -40,6 +40,7 @@ class VoiceSpeechController(
     private val onPartialTranscript: (String) -> Unit,
     private val onFinalTranscript: (String) -> Unit,
     private val onErrorMessage: (String) -> Unit,
+    private val enableTts: Boolean = true,
 ) {
     private val appContext = context.applicationContext
 
@@ -61,7 +62,9 @@ class VoiceSpeechController(
     private var listenGeneration: Int = 0
 
     init {
-        initTts()
+        if (enableTts) {
+            initTts()
+        }
     }
 
     private fun initTts() {

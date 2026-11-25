@@ -267,7 +267,9 @@ fun SettingsScreen(
                 CompactStatusRow(
                     dotColor = if (isDefaultAssistant) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
                     title = "默认数字助手",
+                    statusText = if (isDefaultAssistant) "已设为默认" else null,
                     actionLabel = if (isDefaultAssistant) "试呼出" else "去设置",
+                    onRowClick = { DevicePermissionHelper.openVoiceInputSettings(context) },
                     onAction = {
                         if (isDefaultAssistant) {
                             DevicePermissionHelper.openAssistOverlayPreview(context)
@@ -830,12 +832,13 @@ private fun CompactStatusRow(
     title: String,
     statusText: String? = null,
     actionLabel: String,
+    onRowClick: (() -> Unit)? = null,
     onAction: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onAction)
+            .clickable(onClick = onRowClick ?: onAction)
             .padding(start = 16.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

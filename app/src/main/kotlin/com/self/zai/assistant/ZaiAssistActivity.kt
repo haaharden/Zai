@@ -1,9 +1,14 @@
 package com.self.zai.assistant
 
 import android.Manifest
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import com.self.zai.MainActivity
 import com.self.zai.ZaiApplication
 import com.self.zai.model.MessageRole
@@ -33,13 +39,32 @@ class ZaiAssistActivity : ComponentActivity() {
     private var inputTextState = mutableStateOf("")
     private var attachScreenState = mutableStateOf(false)
     private var visibleState = mutableStateOf(true)
-    private var overlayTurnCount = mutableStateOf(0)
+    private var overlaySessionId = mutableStateOf<String?>(null)
+    private var overlayStartIndex = mutableStateOf<Int?>(null)
     private var invokedAtMs = mutableStateOf(System.currentTimeMillis())
     private var lastSpokenMessageId: String? = null
+    private var suppressAutoDismissUntilMs: Long = 0L
+    private var systemReceiverRegistered: Boolean = false
+
+    private val systemDismissReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> dismissCleanly()
+                @Suppress("DEPRECATION")
+                Intent.ACTION_CLOSE_SYSTEM_DIALOGS -> {
+                    val reason = intent.getStringExtra("reason").orEmpty()
+                    if (reason in SYSTEM_DISMISS_REASONS) {
+                        dismissCleanly()
+                    }
+                }
+            }
+        }
+    }
 
     private val audioPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
+        suppressAutoDismissUntilMs = 0L
         if (granted) {
             speechController?.startListening()
         } else {
@@ -51,6 +76,7 @@ class ZaiAssistActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         disableTransitionAnimation()
         enableEdgeToEdge()
+        registerSystemDismissReceiver()
 
         val app = application as ZaiApplication
         val container = app.container
@@ -60,6 +86,7 @@ class ZaiAssistActivity : ComponentActivity() {
         attachScreenState.value = settings.assistantAttachScreenDefault &&
             AssistantContextBridge.currentValidScreenContext() != null
         prepareOverlaySession(app)
+        AssistantContextBridge.overlayOpenedAtMs = System.currentTimeMillis()
 
         val controller = VoiceSpeechController(
             context = this,
@@ -94,12 +121,17 @@ class ZaiAssistActivity : ComponentActivity() {
                 container.agentCoordinator.sessionModelOption(activeSession)
             }
 
-            // Show only turns from the current overlay session (or latest turn if user sent from here)
-            val overlayMessages = remember(activeSession.messages, overlayTurnCount.value) {
-                if (overlayTurnCount.value <= 0) emptyList() else activeSession.messages.takeLast(2)
+            // Show all turns belonging to this overlay invocation (including active in-flight turn on reopen)
+            val startIdx = if (overlaySessionId.value == activeSession.id) overlayStartIndex.value else null
+            val overlayMessages = remember(activeSession.messages, startIdx) {
+                if (startIdx == null || startIdx >= activeSession.messages.size) {
+                    emptyList()
+                } else {
+                    activeSession.messages.subList(startIdx.coerceAtLeast(0), activeSession.messages.size)
+                }
             }
 
-            // Auto-dismiss the overlay the instant Zai begins touching the underlying screen
+            // Auto-dismiss when Zai starts touching the screen or user re-presses Power 0.5s to toggle off
             LaunchedEffect(Unit) {
                 AssistantContextBridge.dismissOverlayRequests.collect {
                     dismissCleanly()
@@ -109,8 +141,8 @@ class ZaiAssistActivity : ComponentActivity() {
             // Trigger optional TTS readout once an overlay-initiated reply finishes cleanly
             var wasRunning by remember { mutableStateOf(false) }
             LaunchedEffect(isRunning, activeSession.messages.lastOrNull()?.id) {
-                if (wasRunning && !isRunning && overlayTurnCount.value > 0) {
-                    val lastReply = activeSession.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+                if (wasRunning && !isRunning && overlayMessages.isNotEmpty()) {
+                    val lastReply = overlayMessages.lastOrNull { it.role == MessageRole.ASSISTANT }
                     if (lastReply != null && !lastReply.isError && lastReply.text.isNotBlank() && lastReply.id != lastSpokenMessageId) {
                         lastSpokenMessageId = lastReply.id
                         speechController?.speakIfEligible(lastReply.text, liveSettings.assistantTtsMode)
@@ -142,7 +174,13 @@ class ZaiAssistActivity : ComponentActivity() {
                     listenState = listenState,
                     isSpeaking = isSpeaking,
                     inputText = inputTextState.value,
-                    onInputChange = { inputTextState.value = it },
+                    onInputChange = { next ->
+                        if (controller.listenState.value == VoiceListenState.LISTENING) {
+                            controller.cancelListening()
+                        }
+                        inputTextState.value = next
+                    },
+                    onCancelMic = { controller.cancelListening() },
                     attachScreen = attachScreenState.value,
                     capturedScreen = capturedScreen,
                     onToggleAttachScreen = {
@@ -162,6 +200,7 @@ class ZaiAssistActivity : ComponentActivity() {
                         } else if (DevicePermissionHelper.hasAudioPermission(this@ZaiAssistActivity)) {
                             sc.startListening()
                         } else {
+                            suppressAutoDismissUntilMs = System.currentTimeMillis() + 10_000L
                             audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
@@ -176,19 +215,12 @@ class ZaiAssistActivity : ComponentActivity() {
                     },
                     onNewOverlayChat = {
                         speechController?.stopSpeaking()
-                        container.agentCoordinator.startNewSession()
-                        overlayTurnCount.value = 0
+                        val created = container.agentCoordinator.startNewSession()
+                        overlaySessionId.value = created.id
+                        overlayStartIndex.value = 0
                         inputTextState.value = ""
                     },
-                    onExpandFullApp = {
-                        speechController?.stopSpeaking()
-                        startActivity(
-                            Intent(this@ZaiAssistActivity, MainActivity::class.java).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                            },
-                        )
-                        dismissCleanly()
-                    },
+                    onExpandFullApp = { expandToFullApp() },
                     onResolveConfirmation = { callId, allow ->
                         container.agentCoordinator.phoneController.resolveConfirmation(callId, allow)
                     },
@@ -201,9 +233,18 @@ class ZaiAssistActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        // Re-invoking assistant while overlay is already open acts as a clean single-handed toggle off.
+        if (intent.getBooleanExtra(EXTRA_FROM_ASSISTANT, false) &&
+            AssistantContextBridge.shouldToggleDismissOnReinvoke()
+        ) {
+            dismissCleanly()
+            return
+        }
         val app = application as ZaiApplication
         visibleState.value = true
+        AssistantContextBridge.overlayOpenedAtMs = System.currentTimeMillis()
         captureScreenIfMissing(app)
+        prepareOverlaySession(app)
         invokedAtMs.value = System.currentTimeMillis()
     }
 
@@ -212,27 +253,115 @@ class ZaiAssistActivity : ComponentActivity() {
         AssistantContextBridge.isOverlayVisible = true
     }
 
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (System.currentTimeMillis() > suppressAutoDismissUntilMs) {
+            dismissCleanly()
+        }
+    }
+
     override fun onPause() {
         AssistantContextBridge.isOverlayVisible = false
         speechController?.cancelListening()
+        (application as? ZaiApplication)?.container?.agentCoordinator?.onUiBackgroundedIfRunning()
         super.onPause()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Redundant safety net alongside ACTION_SCREEN_OFF so locking the phone never leaves overlay alive
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        if (pm != null && !pm.isInteractive) {
+            dismissCleanly()
+        }
     }
 
     override fun onDestroy() {
         AssistantContextBridge.isOverlayVisible = false
+        AssistantContextBridge.clearScreenContext()
+        unregisterSystemDismissReceiver()
         speechController?.release()
         speechController = null
         super.onDestroy()
     }
 
+    private fun registerSystemDismissReceiver() {
+        if (systemReceiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            @Suppress("DEPRECATION")
+            addAction(Intent.ACTION_CLOSE_SYSTEM_DIALOGS)
+        }
+        runCatching {
+            ContextCompat.registerReceiver(
+                this,
+                systemDismissReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            systemReceiverRegistered = true
+        }
+    }
+
+    private fun unregisterSystemDismissReceiver() {
+        if (!systemReceiverRegistered) return
+        systemReceiverRegistered = false
+        runCatching { unregisterReceiver(systemDismissReceiver) }
+    }
+
+    private fun expandToFullApp() {
+        speechController?.stopSpeaking()
+        speechController?.cancelListening()
+        val launchMain = {
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                },
+            )
+            dismissCleanly()
+        }
+        val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        if (km != null && km.isKeyguardLocked) {
+            suppressAutoDismissUntilMs = System.currentTimeMillis() + 15_000L
+            km.requestDismissKeyguard(
+                this,
+                object : KeyguardManager.KeyguardDismissCallback() {
+                    override fun onDismissSucceeded() {
+                        suppressAutoDismissUntilMs = 0L
+                        launchMain()
+                    }
+
+                    override fun onDismissCancelled() {
+                        suppressAutoDismissUntilMs = 0L
+                    }
+
+                    override fun onDismissError() {
+                        suppressAutoDismissUntilMs = 0L
+                        launchMain()
+                    }
+                },
+            )
+        } else {
+            launchMain()
+        }
+    }
+
     private fun prepareOverlaySession(app: ZaiApplication) {
         val coordinator = app.container.agentCoordinator
-        if (coordinator.isRunning.value) return
-        val current = coordinator.currentSession()
+        if (coordinator.isRunning.value) {
+            val current = coordinator.currentSession()
+            overlaySessionId.value = current.id
+            val lastUserIdx = current.messages.indexOfLast { it.role == MessageRole.USER }
+            overlayStartIndex.value = if (lastUserIdx >= 0) lastUserIdx else 0
+            return
+        }
+        var current = coordinator.currentSession()
         val staleMs = System.currentTimeMillis() - current.updatedAtMs
         if (current.messages.isNotEmpty() && staleMs > FRESH_SESSION_THRESHOLD_MS) {
-            coordinator.startNewSession()
+            current = coordinator.startNewSession()
         }
+        overlaySessionId.value = current.id
+        overlayStartIndex.value = current.messages.size
     }
 
     private fun captureScreenIfMissing(app: ZaiApplication) {
@@ -259,28 +388,37 @@ class ZaiAssistActivity : ComponentActivity() {
         speechController?.stopSpeaking()
         speechController?.cancelListening()
 
+        val coordinator = app.container.agentCoordinator
+        val current = coordinator.currentSession()
+        if (overlaySessionId.value != current.id || overlayStartIndex.value == null) {
+            overlaySessionId.value = current.id
+            overlayStartIndex.value = current.messages.size
+        }
+
         val screenContext = if (attachScreenState.value) {
             AssistantContextBridge.currentValidScreenContext()?.summary
         } else {
             null
         }
-        val res = app.container.agentCoordinator.sendUserMessage(
+        val res = coordinator.sendUserMessage(
             rawText = text,
             extraContextForModel = screenContext,
         )
         res.onSuccess {
             inputTextState.value = ""
-            overlayTurnCount.value += 1
         }.onFailure { err ->
             Toast.makeText(this, err.message ?: "无法发送请求", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun dismissCleanly() {
+        if (isFinishing || isDestroyed) return
+        AssistantContextBridge.isOverlayVisible = false
+        AssistantContextBridge.clearScreenContext()
         speechController?.cancelListening()
         speechController?.stopSpeaking()
         visibleState.value = false
-        finish()
+        finishAndRemoveTask()
         disableTransitionAnimation()
     }
 
@@ -298,5 +436,12 @@ class ZaiAssistActivity : ComponentActivity() {
         const val EXTRA_FROM_ASSISTANT = "extra_from_assistant"
         const val EXTRA_SHOW_FLAGS = "extra_show_flags"
         private const val FRESH_SESSION_THRESHOLD_MS = 10 * 60 * 1000L
+        private val SYSTEM_DISMISS_REASONS = setOf(
+            "homekey",
+            "recentapps",
+            "dream",
+            "lock",
+            "globalactions",
+        )
     }
 }
