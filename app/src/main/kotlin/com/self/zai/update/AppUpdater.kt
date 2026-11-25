@@ -191,7 +191,7 @@ object AppUpdater {
             require(tmpFile.renameTo(finalJs)) { "写入热更新内核失败" }
 
             File(dir, PI_HOT_HTML_NAME).writeText(
-                """<!doctype html><meta charset="utf-8"><title>zai-pi-host</title><script src="host.js"></script>""",
+                """<!doctype html><meta charset="utf-8"><title>zai-pi-host</title><script src="host.js?t=${System.currentTimeMillis()}"></script>""",
                 Charsets.UTF_8,
             )
             File(dir, PI_HOT_VERSION_NAME).writeText(tagName.ifBlank { "hot" }, Charsets.UTF_8)
@@ -199,14 +199,30 @@ object AppUpdater {
         }
     }
 
+    /**
+     * Returns the active Pi hot-update tag ONLY when it is strictly newer than the installed APK version.
+     * Whenever a newer (or same-version) APK is installed, any older `pi_hot` override is automatically
+     * evicted so the freshly bundled `assets/pi/host.js` takes effect immediately without manual reload.
+     */
     fun getActivePiHotTag(context: Context): String? {
         val dir = File(context.filesDir, PI_HOT_DIR_NAME)
         val js = File(dir, PI_HOT_JS_NAME)
         val html = File(dir, PI_HOT_HTML_NAME)
         if (!js.exists() || !html.exists() || js.length() < 10_000L) return null
-        return runCatching {
-            File(dir, PI_HOT_VERSION_NAME).readText(Charsets.UTF_8).trim().ifBlank { "已热更" }
-        }.getOrDefault("已热更")
+        val savedTag = runCatching {
+            File(dir, PI_HOT_VERSION_NAME).readText(Charsets.UTF_8).trim()
+        }.getOrDefault("")
+        if (shouldDiscardHotUpdate(BuildConfig.VERSION_NAME, savedTag)) {
+            clearPiHotUpdate(context)
+            return null
+        }
+        return savedTag.ifBlank { "已热更" }
+    }
+
+    fun shouldDiscardHotUpdate(installedAppVersion: String, savedHotTag: String): Boolean {
+        val clean = savedHotTag.trim()
+        if (clean.isEmpty()) return true
+        return !isRemoteVersionNewer(installedAppVersion, clean)
     }
 
     fun clearPiHotUpdate(context: Context) {

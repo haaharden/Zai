@@ -7,10 +7,12 @@ import android.os.Looper
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
+import com.self.zai.BuildConfig
 import com.self.zai.data.CredentialVault
 import com.self.zai.model.AuthUiState
 import com.self.zai.model.CustomProviderConfig
@@ -274,11 +276,18 @@ class PiEngine(
             settings.domStorageEnabled = true
             settings.allowFileAccess = false
             settings.allowContentAccess = false
+            settings.cacheMode = WebSettings.LOAD_NO_CACHE
+            clearCache(true)
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(
                     view: WebView,
                     request: WebResourceRequest,
-                ): WebResourceResponse? = loader.shouldInterceptRequest(request.url)
+                ): WebResourceResponse? = loader.shouldInterceptRequest(request.url)?.apply {
+                    val headers = HashMap(responseHeaders ?: emptyMap())
+                    headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+                    headers["Pragma"] = "no-cache"
+                    responseHeaders = headers
+                }
 
                 override fun onRenderProcessGone(
                     view: WebView,
@@ -303,10 +312,11 @@ class PiEngine(
         }
 
         webView = wv
+        val bust = "${BuildConfig.VERSION_CODE}_${hotTag ?: "bundled"}"
         val entryUrl = if (hotTag != null) {
-            "https://appassets.androidplatform.net/pi-hot/${AppUpdater.PI_HOT_HTML_NAME}"
+            "https://appassets.androidplatform.net/pi-hot/${AppUpdater.PI_HOT_HTML_NAME}?v=$bust"
         } else {
-            "https://appassets.androidplatform.net/assets/pi/index.html"
+            "https://appassets.androidplatform.net/assets/pi/index.html?v=$bust"
         }
         wv.loadUrl(entryUrl)
     }

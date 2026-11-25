@@ -106,4 +106,12 @@ class ZaiUnitTests {
         assertFalse(AppUpdater.isRemoteVersionNewer("0.1.0", "v0.1.0"))
         assertFalse(AppUpdater.isRemoteVersionNewer("0.2.0", "v0.1.9"))
     }
+
+    @Test
+    fun shouldDiscardHotUpdate_evictsOlderOrEqualHotBundlesAfterApkUpgrade() {
+        assertTrue(AppUpdater.shouldDiscardHotUpdate("0.1.10", "v0.1.9"))
+        assertTrue(AppUpdater.shouldDiscardHotUpdate("0.1.10", "v0.1.10"))
+        assertTrue(AppUpdater.shouldDiscardHotUpdate("0.1.10", ""))
+        assertFalse(AppUpdater.shouldDiscardHotUpdate("0.1.10", "v0.1.11"))
+    }
 }
