@@ -7,6 +7,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.RecognizerIntent
@@ -14,6 +15,7 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import com.self.zai.model.TtsReadoutMode
+import com.self.zai.permission.DevicePermissionHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,7 +36,7 @@ enum class VoiceListenState {
  *    automatically respecting wired/Bluetooth headsets.
  */
 class VoiceSpeechController(
-    context: Context,
+    private val context: Context,
     private val onPartialTranscript: (String) -> Unit,
     private val onFinalTranscript: (String) -> Unit,
     private val onErrorMessage: (String) -> Unit,
@@ -55,6 +57,7 @@ class VoiceSpeechController(
     private var ttsReady: Boolean = false
     private var pendingSpeakText: String? = null
     private var latestPartial: String = ""
+    private var heardSpeech: Boolean = false
     private var listenGeneration: Int = 0
 
     init {
@@ -105,19 +108,30 @@ class VoiceSpeechController(
 
     fun startListening(): Boolean {
         stopSpeaking()
-        val component = resolveExternalRecognitionService(appContext)
-        if (component == null && !SpeechRecognizer.isRecognitionAvailable(appContext)) {
+        val externalComponent = resolveExternalRecognitionService(appContext)
+        ensureSystemVoiceRecognitionService(appContext, externalComponent)
+
+        if (externalComponent == null && !SpeechRecognizer.isRecognitionAvailable(appContext)) {
             _listenState.value = VoiceListenState.ERROR
             onErrorMessage("未检测到可用的系统语音识别服务")
             return false
         }
 
         destroyRecognizer()
+        // Prefer 1-arg SpeechRecognizer through system SpeechRecognitionManagerService whenever
+        // voice_recognition_service points to a real external recognizer so Android 12-16 properly
+        // proxies foreground RECORD_AUDIO attribution from the active Activity.
+        val configuredRecognizer = currentConfiguredRecognitionService(appContext)
+        val useSystemManagedPath = configuredRecognizer != null &&
+            configuredRecognizer.packageName != appContext.packageName
+
         val sr = runCatching {
-            if (component != null) {
-                SpeechRecognizer.createSpeechRecognizer(appContext, component)
+            if (useSystemManagedPath) {
+                SpeechRecognizer.createSpeechRecognizer(context)
+            } else if (externalComponent != null) {
+                SpeechRecognizer.createSpeechRecognizer(context, externalComponent)
             } else {
-                SpeechRecognizer.createSpeechRecognizer(appContext)
+                SpeechRecognizer.createSpeechRecognizer(context)
             }
         }.getOrNull()
 
@@ -128,6 +142,7 @@ class VoiceSpeechController(
         }
 
         latestPartial = ""
+        heardSpeech = false
         val gen = ++listenGeneration
         sr.setRecognitionListener(
             object : RecognitionListener {
@@ -138,6 +153,8 @@ class VoiceSpeechController(
 
                 override fun onBeginningOfSpeech() {
                     if (gen != listenGeneration) return
+                    // Note: Xiaomi AsrService invokes onBeginningOfSpeech() immediately on mic open
+                    // before any real speech; track actual speech via onPartialResults instead.
                     _listenState.value = VoiceListenState.LISTENING
                 }
 
@@ -157,7 +174,12 @@ class VoiceSpeechController(
                     if (gen != listenGeneration) return
                     _rmsDb.value = 0f
                     val fallback = latestPartial.trim()
-                    if (fallback.isNotEmpty() && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                    if (fallback.isNotEmpty() && (
+                            error == SpeechRecognizer.ERROR_NO_MATCH ||
+                                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
+                                error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
+                            )
+                    ) {
                         _listenState.value = VoiceListenState.IDLE
                         latestPartial = ""
                         onFinalTranscript(fallback)
@@ -167,9 +189,10 @@ class VoiceSpeechController(
                     val msg = when (error) {
                         SpeechRecognizer.ERROR_AUDIO -> "麦克风录音异常"
                         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "请先授予麦克风权限"
-                        SpeechRecognizer.ERROR_NETWORK,
-                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
-                        -> "语音识别网络超时"
+                        SpeechRecognizer.ERROR_NETWORK -> "语音识别网络连接失败"
+                        // Xiaomi's AsrService maps its 5s no-speech DIALOG_START timeout (50010004)
+                        // to ERROR_NETWORK_TIMEOUT; stop quietly if the user hasn't spoken yet.
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> if (heardSpeech) "语音识别超时，请重试" else ""
                         SpeechRecognizer.ERROR_NO_MATCH,
                         SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
                         SpeechRecognizer.ERROR_CLIENT,
@@ -204,6 +227,7 @@ class VoiceSpeechController(
                         ?.trim()
                         .orEmpty()
                     if (partial.isNotEmpty()) {
+                        heardSpeech = true
                         latestPartial = partial
                         onPartialTranscript(partial)
                     }
@@ -293,6 +317,34 @@ class VoiceSpeechController(
     }
 
     companion object {
+        fun currentConfiguredRecognitionService(context: Context): ComponentName? {
+            val raw = runCatching {
+                Settings.Secure.getString(context.contentResolver, "voice_recognition_service")
+            }.getOrNull()?.trim().orEmpty()
+            if (raw.isEmpty()) return null
+            return ComponentName.unflattenFromString(raw)
+        }
+
+        /**
+         * On Android 13-16 / HyperOS, if `voice_recognition_service` is null (e.g. after switching
+         * default assistant away from XiaoAi), the OS refuses to proxy `RECORD_AUDIO` attribution
+         * to `com.xiaomi.mibrain.speech` and silences audio capture (`App op 27 missing`).
+         * When Zai holds `WRITE_SECURE_SETTINGS`, self-heal this setting automatically.
+         */
+        fun ensureSystemVoiceRecognitionService(context: Context, externalComponent: ComponentName?) {
+            if (externalComponent == null) return
+            val current = currentConfiguredRecognitionService(context)
+            if (current != null && current.packageName != context.packageName) return
+            if (!DevicePermissionHelper.hasWriteSecureSettings(context)) return
+            runCatching {
+                Settings.Secure.putString(
+                    context.contentResolver,
+                    "voice_recognition_service",
+                    externalComponent.flattenToString(),
+                )
+            }
+        }
+
         /**
          * Resolves a real external [RecognitionService] installed on the device, preferring Xiaomi's
          * built-in speech engine on HyperOS/MIUI and never selecting Zai's own stub service.

@@ -119,14 +119,16 @@ class ZaiAssistActivity : ComponentActivity() {
                 wasRunning = isRunning
             }
 
-            // Auto-start voice listening on open if enabled & mic permission already granted
+            // Auto-start voice listening on open once the overlay is resumed and foreground
             LaunchedEffect(invokedAtMs.value) {
                 if (liveSettings.assistantAutoListen &&
                     DevicePermissionHelper.hasAudioPermission(this@ZaiAssistActivity) &&
                     !container.agentCoordinator.isRunning.value
                 ) {
-                    delay(120L)
-                    speechController?.startListening()
+                    delay(220L)
+                    if (!isFinishing && !isDestroyed && AssistantContextBridge.isOverlayVisible) {
+                        speechController?.startListening()
+                    }
                 }
             }
 
