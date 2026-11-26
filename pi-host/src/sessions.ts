@@ -66,6 +66,10 @@ export class SessionManager {
         };
 
     const compactionCfg = normalizeCompactionConfig(cfg.compaction);
+    const carriedAnchor =
+      prev && extracted.messages.length >= (prev.agent.state.messages.filter((m: any) => m.role !== "system").length)
+        ? prev.compactor.exportUsageAnchor()
+        : null;
     const compactor = new SessionCompactor(
       cfg.session,
       this.models,
@@ -73,6 +77,7 @@ export class SessionManager {
       cfg.systemPrompt,
       compactionCfg,
       extracted.persisted,
+      carriedAnchor,
     );
 
     const effectiveSystemPrompt = `${cfg.systemPrompt}${compactor.getSystemPromptAddition()}`;
@@ -83,6 +88,7 @@ export class SessionManager {
       () => this.saveTranscript(cfg.session),
     );
     const allTools = [...createPhoneTools(cfg.session, cfg.toolSpecs ?? []), ...acpTools];
+    compactor.setPromptOverhead(effectiveSystemPrompt, allTools);
 
     const agent = new Agent({
       initialState: {
@@ -252,9 +258,21 @@ export class SessionManager {
           const s = this.sessions.get(sessionId);
           const usage = m.usage;
           if (s && usage) {
-            const actualIn = Number(usage.input ?? 0) + Number(usage.cacheRead ?? 0);
+            const actualIn =
+              Number(usage.input ?? 0) +
+              Number(usage.cacheRead ?? 0) +
+              Number(usage.cacheWrite ?? 0);
+            const actualVisibleOut = Math.max(
+              0,
+              Number(usage.output ?? 0) - Number(usage.reasoning ?? 0),
+            );
             if (actualIn > 0) {
-              s.compactor.recordActualInputTokens(actualIn, s.agent.state.messages.length);
+              s.compactor.recordActualInputTokens(
+                actualIn,
+                s.agent.state.messages.length,
+                actualVisibleOut,
+                s.agent.state.messages,
+              );
               s.compactor.emitUsage(s.agent.state.messages);
             }
           }

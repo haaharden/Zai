@@ -161,8 +161,30 @@ export function estimateMessageTokens(msg: any): number {
   return tokens;
 }
 
-export function estimateConversationTokens(messages: readonly AgentMessage[], systemPrompt: string): number {
-  let total = estimateTextTokens(systemPrompt) + 250;
+export function estimateToolsOverheadTokens(
+  tools: readonly { name?: string; description?: string; parameters?: unknown }[],
+): number {
+  if (!tools || tools.length === 0) return 0;
+  let chars = 0;
+  for (const t of tools) {
+    chars += (t.name?.length ?? 0) + (t.description?.length ?? 0) + 48;
+    if (t.parameters) {
+      try {
+        chars += JSON.stringify(t.parameters).length;
+      } catch {
+        chars += 240;
+      }
+    }
+  }
+  return Math.ceil(chars / 3.8);
+}
+
+export function estimateConversationTokens(
+  messages: readonly AgentMessage[],
+  systemPrompt: string,
+  extraOverheadTokens: number = 0,
+): number {
+  let total = estimateTextTokens(systemPrompt) + extraOverheadTokens + 250;
   for (const m of messages) {
     total += estimateMessageTokens(m);
   }
@@ -372,6 +394,13 @@ function appendNudgeToMessages(messages: AgentMessage[], nudgeText: string): Age
   return copy;
 }
 
+export interface UsageCalibrationAnchor {
+  modelId: string;
+  lastReportedInputTokens: number;
+  lastReportedMsgCount: number;
+  calibrationDelta: number;
+}
+
 /**
  * Per-session Context Compaction Engine powered by the official `acp-kernel` (billion-context core)
  * in ACP mode, plus clean automatic threshold compaction in AUTO mode.
@@ -385,7 +414,10 @@ export class SessionCompactor {
   private nextMsgSeq: number;
   private lastReportedInputTokens = 0;
   private lastReportedMsgCount = 0;
+  private calibrationDelta = 0;
   private lastEffectiveTokens = 0;
+  private lastEffectiveMsgCount = 0;
+  private baseOverheadTokens = 0;
   private isCompacting = false;
 
   constructor(
@@ -395,6 +427,7 @@ export class SessionCompactor {
     private readonly systemPrompt: string,
     public readonly config: CompactionConfig,
     persisted: PersistedCompactionState | null = null,
+    carriedAnchor: UsageCalibrationAnchor | null = null,
   ) {
     this.core = createCore({ countTokens: estimateTextTokens });
     const contextWindow = Math.max(4_096, this.model.contextWindow || 128_000);
@@ -442,6 +475,42 @@ export class SessionCompactor {
     this.acpState = persisted?.state ?? createInitialState();
     this.contentStore = persisted?.contentStore ?? createContentStore();
     this.nextMsgSeq = persisted?.nextMsgSeq ?? 0;
+    this.baseOverheadTokens = estimateTextTokens(`${this.systemPrompt}${this.getSystemPromptAddition()}`) + 250;
+    if (carriedAnchor && carriedAnchor.modelId === this.model.id) {
+      this.lastReportedInputTokens = carriedAnchor.lastReportedInputTokens;
+      this.lastReportedMsgCount = carriedAnchor.lastReportedMsgCount;
+      this.calibrationDelta = carriedAnchor.calibrationDelta;
+    }
+  }
+
+  /**
+   * Registers the actual system prompt (including ACP rules) and registered tool schemas so local
+   * token estimation matches provider-reported prompt tokens without a 5%+ drop on reconfigure/compact.
+   */
+  setPromptOverhead(effectiveSystemPrompt: string, tools: readonly AgentTool<any>[]) {
+    this.baseOverheadTokens =
+      estimateTextTokens(effectiveSystemPrompt) + estimateToolsOverheadTokens(tools) + 250;
+  }
+
+  exportUsageAnchor(): UsageCalibrationAnchor {
+    return {
+      modelId: this.model.id,
+      lastReportedInputTokens: this.lastReportedInputTokens,
+      lastReportedMsgCount: this.lastReportedMsgCount,
+      calibrationDelta: this.calibrationDelta,
+    };
+  }
+
+  private nonSystemMessages(messages: readonly AgentMessage[]): readonly AgentMessage[] {
+    return messages.filter((m: any) => m?.role !== "system");
+  }
+
+  private estimateTotalTokens(messages: readonly AgentMessage[]): number {
+    let total = this.baseOverheadTokens;
+    for (const m of this.nonSystemMessages(messages)) {
+      total += estimateMessageTokens(m);
+    }
+    return total;
   }
 
   /**
@@ -480,10 +549,24 @@ export class SessionCompactor {
     return activeBlocks(this.acpState).length;
   }
 
-  recordActualInputTokens(inputTokens: number, messageCount: number) {
-    if (inputTokens > 0) {
-      this.lastReportedInputTokens = inputTokens;
-      this.lastReportedMsgCount = messageCount;
+  recordActualInputTokens(
+    inputTokens: number,
+    messageCount: number,
+    visibleOutputTokens: number = 0,
+    messagesForCalibration?: readonly AgentMessage[],
+  ) {
+    if (inputTokens <= 0) return;
+    const postTurnTokens = inputTokens + Math.max(0, visibleOutputTokens);
+    const normalizedCount = messagesForCalibration
+      ? this.nonSystemMessages(messagesForCalibration).length
+      : messageCount;
+    this.lastReportedInputTokens = postTurnTokens;
+    this.lastReportedMsgCount = normalizedCount;
+    if (messagesForCalibration) {
+      const localEst = this.estimateActiveTokens(messagesForCalibration);
+      const rawDelta = postTurnTokens - localEst;
+      // Keep calibration delta bounded so outlier turns never distort post-compaction estimates
+      this.calibrationDelta = Math.max(-8_000, Math.min(32_000, rawDelta));
     }
   }
 
@@ -539,16 +622,34 @@ export class SessionCompactor {
     });
   }
 
+  private estimateActiveTokens(messages: readonly AgentMessage[]): number {
+    const visible = this.nonSystemMessages(messages);
+    const rawEstimated = this.estimateTotalTokens(visible);
+    if (this.config.mode === "acp" && this.lastEffectiveTokens > 0 && this.acpState.blocks.length > 0) {
+      let tailTokens = 0;
+      if (this.lastEffectiveMsgCount > 0 && visible.length > this.lastEffectiveMsgCount) {
+        for (let i = this.lastEffectiveMsgCount; i < visible.length; i++) {
+          tailTokens += estimateMessageTokens(visible[i]);
+        }
+      }
+      return Math.min(rawEstimated, this.lastEffectiveTokens + tailTokens);
+    }
+    return rawEstimated;
+  }
+
   computeUsage(messages: readonly AgentMessage[]): ContextUsageSnapshot {
-    const rawEstimated = estimateConversationTokens(messages, this.systemPrompt);
-    const activeBase =
-      this.config.mode === "acp" && this.lastEffectiveTokens > 0 && this.acpState.blocks.length > 0
-        ? Math.min(rawEstimated, this.lastEffectiveTokens)
-        : rawEstimated;
-    const effective =
-      this.lastReportedInputTokens > 0 && messages.length >= this.lastReportedMsgCount
-        ? Math.max(activeBase, this.lastReportedInputTokens)
-        : activeBase;
+    const visible = this.nonSystemMessages(messages);
+    const activeBase = this.estimateActiveTokens(visible);
+    let effective: number;
+    if (this.lastReportedInputTokens > 0 && visible.length >= this.lastReportedMsgCount) {
+      let appendedTokens = 0;
+      for (let i = this.lastReportedMsgCount; i < visible.length; i++) {
+        appendedTokens += estimateMessageTokens(visible[i]);
+      }
+      effective = this.lastReportedInputTokens + appendedTokens;
+    } else {
+      effective = Math.max(0, activeBase + this.calibrationDelta);
+    }
     const contextWindow = Math.max(4_096, this.model.contextWindow || 128_000);
     const percent = Math.max(0, Math.min(100, Math.round((effective / contextWindow) * 100)));
     return {
@@ -606,11 +707,8 @@ export class SessionCompactor {
   ): Promise<AgentMessage[]> {
     const rawMap = this.ensureStableIds(messages);
     const coreMessages = this.toCoreMessages(messages);
-    const estimatedBefore = estimateConversationTokens(messages, this.systemPrompt);
-    const tokenInput =
-      this.lastReportedInputTokens > 0 && messages.length >= this.lastReportedMsgCount
-        ? Math.max(estimatedBefore, this.lastReportedInputTokens)
-        : estimatedBefore;
+    const estimatedBefore = this.computeUsage(messages).estimatedTokens;
+    const tokenInput = estimatedBefore;
 
     let turnResult = this.core.processTurn({
       messages: coreMessages,
@@ -624,7 +722,8 @@ export class SessionCompactor {
     this.contentStore = turnResult.contentStore;
 
     let projected = this.projectCoreToAgentMessages(turnResult.messages, rawMap);
-    this.lastEffectiveTokens = estimateConversationTokens(projected, this.systemPrompt);
+    this.lastEffectiveTokens = this.estimateTotalTokens(projected);
+    this.lastEffectiveMsgCount = this.nonSystemMessages(messages).length;
     const usage = this.emitUsage(messages);
 
     // Emergency auto-fallback if model ignored nudges and usage hit extreme ceiling
@@ -643,7 +742,8 @@ export class SessionCompactor {
         this.acpState = turnResult.state;
         this.contentStore = turnResult.contentStore;
         projected = this.projectCoreToAgentMessages(turnResult.messages, rawMap);
-        this.lastEffectiveTokens = estimateConversationTokens(projected, this.systemPrompt);
+        this.lastEffectiveTokens = this.estimateTotalTokens(projected);
+        this.lastEffectiveMsgCount = this.nonSystemMessages(messages).length;
         this.emitUsage(messages);
       }
     }
@@ -815,8 +915,9 @@ export class SessionCompactor {
       this.acpState = afterTurn.state;
       const rawMap = this.ensureStableIds(messages);
       const projected = this.projectCoreToAgentMessages(afterTurn.messages, rawMap);
-      const afterTokens = estimateConversationTokens(projected, this.systemPrompt);
+      const afterTokens = this.estimateTotalTokens(projected);
       this.lastEffectiveTokens = afterTokens;
+      this.lastEffectiveMsgCount = this.nonSystemMessages(messages).length;
       const contextWindow = Math.max(4_096, this.model.contextWindow || 128_000);
       const percent = Math.max(0, Math.min(100, Math.round((afterTokens / contextWindow) * 100)));
       const newestBlock = this.acpState.blocks[this.acpState.blocks.length - 1];
@@ -874,7 +975,7 @@ export class SessionCompactor {
       const nextMessages = [summaryAnchor, ...recent];
       this.lastReportedInputTokens = 0;
       this.lastReportedMsgCount = 0;
-      const afterTokens = estimateConversationTokens(nextMessages, this.systemPrompt);
+      const afterTokens = this.estimateTotalTokens(nextMessages);
       const percent = Math.max(0, Math.min(100, Math.round((afterTokens / contextWindow) * 100)));
 
       bridge({
@@ -939,6 +1040,7 @@ export class SessionCompactor {
             this.lastReportedMsgCount = 0;
             const afterTokens = Math.max(0, beforeTokens - applied.result.tokensCompressed);
             this.lastEffectiveTokens = afterTokens;
+            this.lastEffectiveMsgCount = this.nonSystemMessages(messages).length;
             const contextWindow = Math.max(4_096, this.model.contextWindow || 128_000);
             const percent = Math.max(0, Math.min(100, Math.round((afterTokens / contextWindow) * 100)));
             const newest = this.acpState.blocks[this.acpState.blocks.length - 1];
