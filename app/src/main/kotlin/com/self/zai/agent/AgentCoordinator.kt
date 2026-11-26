@@ -165,6 +165,28 @@ class AgentCoordinator(
         val defModel = modelSelection.defaultModelOption()
         val defThinking = defModel?.clampThinking(repository.settings.value.thinkingLevel)
             ?: repository.settings.value.thinkingLevel
+
+        val current = currentSession()
+        if (current.messages.isEmpty() && _runningSessionId.value != current.id) {
+            return current
+        }
+
+        val reusableEmpty = repository.sessions.value.firstOrNull {
+            it.messages.isEmpty() && it.id != _runningSessionId.value
+        }
+        if (reusableEmpty != null) {
+            val refreshed = reusableEmpty.copy(
+                title = "新对话",
+                updatedAtMs = System.currentTimeMillis(),
+                providerId = defModel?.providerId ?: reusableEmpty.providerId,
+                modelId = defModel?.id ?: reusableEmpty.modelId,
+                thinkingLevel = defThinking,
+            )
+            repository.upsertSession(refreshed, flushImmediately = true)
+            _activeSessionId.value = refreshed.id
+            return refreshed
+        }
+
         val created = repository.createNewSession().copy(
             providerId = defModel?.providerId,
             modelId = defModel?.id,

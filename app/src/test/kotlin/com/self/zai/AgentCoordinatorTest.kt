@@ -582,6 +582,69 @@ class AgentCoordinatorTest {
         assertEquals("receipt.jpg", savedSession.messages.first().attachments.first().displayName)
     }
 
+    @Test
+    fun coordinator_startNewSession_reusesCurrentOrExistingEmptySessionInsteadOfDuplicating() = runBlocking {
+        val repo = InMemorySessionRepository()
+        val vault = InMemoryVault()
+        val runtime = FakeAgentRuntime()
+        val model = ModelOption(
+            providerId = "custom_p",
+            providerName = "Custom",
+            id = "m1",
+            name = "M1",
+            contextWindow = 128_000,
+            supportsImages = true,
+            thinkingLevels = listOf("off"),
+        )
+        runtime.setProviders(
+            listOf(
+                ProviderStatus(
+                    id = "custom_p",
+                    name = "Custom",
+                    credentialType = "api_key",
+                    isCustom = true,
+                    supportsOAuth = false,
+                    models = listOf(model),
+                ),
+            ),
+        )
+        val phoneController = PhoneController(repo, StubDeviceChannel(), StubAppDirectory())
+        val dispatcher = AgentToolDispatcher(repo, vault, phoneController, StubMcpClient())
+        lateinit var coordinator: AgentCoordinator
+        val modelSelection = ModelSelectionManager(repo, vault, runtime) { coordinator.invalidateSessionConfig(it) }
+        coordinator = AgentCoordinator(
+            repository = repo,
+            credentialVault = vault,
+            runtime = runtime,
+            phoneController = phoneController,
+            toolDispatcher = dispatcher,
+            mcpClient = StubMcpClient(),
+            modelSelection = modelSelection,
+            returnNavigator = FakeReturnNavigator(true),
+            chromeHost = FakeChromeHost(),
+            mainDispatcher = Dispatchers.Unconfined,
+        )
+
+        // Calling startNewSession while already on an empty session is a no-op
+        val firstEmpty = coordinator.currentSession()
+        val repeated = coordinator.startNewSession()
+        assertEquals(firstEmpty.id, repeated.id)
+        assertEquals(1, repo.sessions.value.size)
+
+        // After sending a message, startNewSession creates a second session
+        assertTrue(coordinator.sendUserMessage("你好").isSuccess)
+        runtime.emit(PiSessionEvent.Idle(firstEmpty.id))
+        val secondEmpty = coordinator.startNewSession()
+        assertTrue(secondEmpty.id != firstEmpty.id)
+        assertEquals(2, repo.sessions.value.size)
+
+        // Switching back to the non-empty first session and tapping "+" reuses the existing empty session
+        coordinator.selectSession(firstEmpty.id)
+        val reused = coordinator.startNewSession()
+        assertEquals(secondEmpty.id, reused.id)
+        assertEquals(2, repo.sessions.value.size)
+    }
+
     private class FakeAgentRuntime : AgentRuntime {
         override val isReady = MutableStateFlow(true)
         override val piVersion = MutableStateFlow("1.6.0")

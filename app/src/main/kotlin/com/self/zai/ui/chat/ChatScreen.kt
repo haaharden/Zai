@@ -342,14 +342,20 @@ fun ChatScreen(
                     )
                 }
 
+                val canStartNewChat = session.messages.isNotEmpty()
                 HeaderSquareTrigger(
+                    enabled = canStartNewChat,
                     onClick = onNewSession,
                     contentDescription = "新对话",
                 ) {
                     Icon(
                         Icons.Rounded.Add,
                         contentDescription = "新对话",
-                        tint = MaterialTheme.colorScheme.onSurface,
+                        tint = if (canStartNewChat) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.32f)
+                        },
                         modifier = Modifier.size(20.dp),
                     )
                 }
@@ -1405,13 +1411,14 @@ private fun ZSettingsButton(
 private fun HeaderSquareTrigger(
     onClick: () -> Unit,
     contentDescription: String,
+    enabled: Boolean = true,
     icon: @Composable () -> Unit,
 ) {
     Box(
         modifier = Modifier
             .size(38.dp)
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         icon()
