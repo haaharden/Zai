@@ -101,8 +101,10 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -780,11 +782,24 @@ fun ChatScreen(
                     }
                 }
 
+                var inputLineCount by remember { mutableIntStateOf(1) }
+                if (inputText.isEmpty() && inputLineCount != 1) {
+                    inputLineCount = 1
+                }
+                val composerTextStyle = MaterialTheme.typography.bodyLarge.copy(
+                    lineHeight = 22.sp,
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    lineHeightStyle = LineHeightStyle(
+                        alignment = LineHeightStyle.Alignment.Center,
+                        trim = LineHeightStyle.Trim.None,
+                    ),
+                )
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 8.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.Bottom,
+                        .padding(horizontal = 6.dp, vertical = 6.dp),
+                    verticalAlignment = if (inputLineCount <= 1) Alignment.CenterVertically else Alignment.Bottom,
                 ) {
                     Surface(
                         onClick = { showAttachmentSheet = true },
@@ -815,7 +830,9 @@ fun ChatScreen(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .padding(vertical = 9.dp),
+                            .heightIn(min = 38.dp)
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.CenterStart,
                     ) {
                         if (inputText.isEmpty()) {
                             Text(
@@ -826,7 +843,9 @@ fun ChatScreen(
                                     backgroundRunningSession != null -> "后台有任务运行中…"
                                     else -> "问 Zai…"
                                 },
-                                style = MaterialTheme.typography.bodyLarge,
+                                style = composerTextStyle,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 color = if (isVoiceListening) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
@@ -837,10 +856,14 @@ fun ChatScreen(
                         BasicTextField(
                             value = inputText,
                             onValueChange = { next ->
+                                if (next.isEmpty()) inputLineCount = 1
                                 if (isVoiceListening) onCancelVoiceInput()
                                 onInputTextChange(next)
                             },
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            onTextLayout = { layout ->
+                                inputLineCount = layout.lineCount.coerceAtLeast(1)
+                            },
+                            textStyle = composerTextStyle.copy(
                                 color = MaterialTheme.colorScheme.onSurface,
                             ),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
