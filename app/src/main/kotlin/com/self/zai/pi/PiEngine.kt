@@ -16,6 +16,7 @@ import com.self.zai.BuildConfig
 import com.self.zai.data.CredentialVault
 import com.self.zai.model.AuthUiState
 import com.self.zai.model.CustomProviderConfig
+import com.self.zai.model.PromptImage
 import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.update.AppUpdater
@@ -303,7 +304,29 @@ class PiEngine(
     }
 
     override fun prompt(sessionId: String, text: String) {
-        callJs("prompt", JSONObject().put("session", sessionId).put("text", text).toString())
+        prompt(sessionId, text, emptyList())
+    }
+
+    override fun prompt(sessionId: String, text: String, images: List<PromptImage>) {
+        val payload = JSONObject()
+            .put("session", sessionId)
+            .put("text", text)
+        if (images.isNotEmpty()) {
+            val arr = JSONArray()
+            for (img in images) {
+                if (img.dataBase64.isNotBlank()) {
+                    arr.put(
+                        JSONObject()
+                            .put("data", img.dataBase64)
+                            .put("mimeType", img.mimeType.ifBlank { "image/jpeg" }),
+                    )
+                }
+            }
+            if (arr.length() > 0) {
+                payload.put("images", arr)
+            }
+        }
+        callJs("prompt", payload.toString())
     }
 
     override fun compactSession(sessionId: String) {

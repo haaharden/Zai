@@ -1,6 +1,7 @@
 package com.self.zai.ui.chat
 
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -10,6 +11,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +36,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -44,16 +47,25 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -64,11 +76,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -80,20 +94,35 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.self.zai.assistant.VoiceListenState
+import com.self.zai.data.AttachmentManager
+import com.self.zai.model.AttachmentKind
+import com.self.zai.model.ChatAttachment
 import com.self.zai.model.ChatMessage
 import com.self.zai.model.ChatSession
 import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
+import com.self.zai.model.PendingAttachment
 import com.self.zai.model.PendingConfirmation
 import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
@@ -101,6 +130,7 @@ import com.self.zai.model.SessionContextUsage
 import com.self.zai.model.SkillEntry
 import com.self.zai.model.StepState
 import com.self.zai.model.ThinkingLevelDisplay
+import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.shell.ShizukuStatus
 import com.self.zai.ui.components.ZaiCopyIconButton
 import com.self.zai.ui.components.ZaiEmblemMark
@@ -133,12 +163,19 @@ fun ChatScreen(
     pendingConfirmation: PendingConfirmation?,
     inputText: String,
     onInputTextChange: (String) -> Unit,
+    pendingAttachments: List<PendingAttachment> = emptyList(),
+    importingAttachments: Boolean = false,
+    onPickImages: () -> Unit = {},
+    onTakePhoto: () -> Unit = {},
+    onPickFiles: () -> Unit = {},
+    onPasteClipboardImage: () -> Unit = {},
+    onRemoveAttachment: (String) -> Unit = {},
     voiceListenState: VoiceListenState,
     onToggleVoiceInput: () -> Unit,
     onCancelVoiceInput: () -> Unit,
     onRefreshQuota: (providerId: String, force: Boolean) -> Unit,
     onCompactSession: () -> Unit,
-    onSendMessage: (String) -> Unit,
+    onSendMessage: (String, List<PendingAttachment>) -> Boolean,
     onStopRun: () -> Unit,
     onFocusRunningSession: () -> Unit = {},
     onSelectSession: (String) -> Unit,
@@ -148,15 +185,33 @@ fun ChatScreen(
     onSelectSessionThinking: (String) -> Unit,
     onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
+    onRepairAccessibility: suspend () -> Result<Unit> = { Result.failure(UnsupportedOperationException()) },
     onResolveConfirmation: (callId: String, allow: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var showSessionsSheet by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showThinkingPicker by remember { mutableStateOf(false) }
     var showContextSheet by remember { mutableStateOf(false) }
+    var showAttachmentSheet by remember { mutableStateOf(false) }
+    var lightboxData by remember { mutableStateOf<ImageLightboxData?>(null) }
+    var hasWriteSecure by remember { mutableStateOf(DevicePermissionHelper.hasWriteSecureSettings(context)) }
+    var a11ySettingOn by remember { mutableStateOf(DevicePermissionHelper.isAccessibilityEnabledInSettings(context)) }
+    var repairingA11y by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasWriteSecure = DevicePermissionHelper.hasWriteSecureSettings(context)
+                a11ySettingOn = DevicePermissionHelper.isAccessibilityEnabledInSettings(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val hasControlChannel = accessibilityConnected || shizukuStatus.isReady
     val isCurrentSessionRunning = isRunning && (runningSessionId == null || runningSessionId == session.id)
@@ -364,6 +419,23 @@ fun ChatScreen(
         // Subtle actionable setup strip when needed (accent left bar, zero boxy alert feel)
         if (sessionModel == null || !hasControlChannel) {
             val missingModel = sessionModel == null
+            val canAutoRepair = !missingModel && !accessibilityConnected &&
+                (hasWriteSecure || shizukuStatus.isReady)
+            val stripText = when {
+                missingModel -> "先配置模型账号"
+                repairingA11y -> "正在自动拉起无障碍…"
+                canAutoRepair && a11ySettingOn -> "无障碍已脱绑，点此一键恢复"
+                canAutoRepair -> "无障碍未连接，点此一键拉起"
+                a11ySettingOn -> "无障碍已脱绑，点此直达无障碍重开"
+                else -> "开启无障碍即可操控手机"
+            }
+            val stripAction = when {
+                missingModel -> "设置"
+                repairingA11y -> "恢复中"
+                canAutoRepair -> "恢复"
+                a11ySettingOn -> "去重开"
+                else -> "去开启"
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -371,7 +443,34 @@ fun ChatScreen(
                     .clip(RoundedCornerShape(14.dp))
                     .background(MaterialTheme.colorScheme.surface)
                     .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-                    .clickable { if (missingModel) onOpenModels() else onOpenSettings() }
+                    .clickable(enabled = !repairingA11y) {
+                        when {
+                            missingModel -> onOpenModels()
+                            canAutoRepair -> {
+                                repairingA11y = true
+                                scope.launch {
+                                    val res = onRepairAccessibility()
+                                    repairingA11y = false
+                                    hasWriteSecure = DevicePermissionHelper.hasWriteSecureSettings(context)
+                                    a11ySettingOn = DevicePermissionHelper.isAccessibilityEnabledInSettings(context)
+                                    res.onSuccess {
+                                        Toast.makeText(context, "已恢复无障碍", Toast.LENGTH_SHORT).show()
+                                    }.onFailure { err ->
+                                        Toast.makeText(
+                                            context,
+                                            err.message ?: "自动拉起失败，请手动开启",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                        DevicePermissionHelper.openAccessibilitySettings(
+                                            context,
+                                            showGuideToast = false,
+                                        )
+                                    }
+                                }
+                            }
+                            else -> DevicePermissionHelper.openAccessibilitySettings(context)
+                        }
+                    }
                     .padding(start = 12.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -387,14 +486,14 @@ fun ChatScreen(
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    text = if (missingModel) "先配置模型账号" else "开启无障碍即可操控手机",
+                    text = stripText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "设置",
+                    text = stripAction,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold,
@@ -418,7 +517,10 @@ fun ChatScreen(
                     items(session.messages, key = { it.id }) { msg ->
                         val isLatestAssistant = isCurrentSessionRunning && msg.id == session.messages.lastOrNull()?.id
                         when (msg.role) {
-                            MessageRole.USER -> UserBubble(msg.text)
+                            MessageRole.USER -> UserBubble(
+                                message = msg,
+                                onOpenLightbox = { lightboxData = it },
+                            )
                             MessageRole.ASSISTANT -> AssistantTurn(
                                 message = msg,
                                 isActiveTurn = isLatestAssistant,
@@ -593,8 +695,12 @@ fun ChatScreen(
             }
         }
 
-        // Sculpted floating composer dock
+        // Sculpted floating composer dock (unified attachment strip + input row)
         val isVoiceListening = voiceListenState == VoiceListenState.LISTENING
+        val hasAttachments = pendingAttachments.isNotEmpty()
+        val hasImageAttachments = pendingAttachments.any { it.promptImages.isNotEmpty() }
+        val modelLacksVision = sessionModel != null && !sessionModel.supportsImages && hasImageAttachments
+        val hasPayloadToSend = inputText.isNotBlank() || hasAttachments
         Surface(
             shape = RoundedCornerShape(26.dp),
             color = MaterialTheme.colorScheme.surface,
@@ -610,121 +716,311 @@ fun ChatScreen(
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 9.dp),
-                ) {
-                    if (inputText.isEmpty()) {
-                        Text(
-                            text = when {
-                                isVoiceListening -> "聆听中…"
-                                isCurrentSessionRunning -> "输入可随时补充…"
-                                backgroundRunningSession != null -> "后台有任务运行中…"
-                                else -> "问 Zai…"
-                            },
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (isVoiceListening) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                            },
-                        )
-                    }
-                    BasicTextField(
-                        value = inputText,
-                        onValueChange = { next ->
-                            if (isVoiceListening) onCancelVoiceInput()
-                            onInputTextChange(next)
-                        },
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(
-                            color = MaterialTheme.colorScheme.onSurface,
-                        ),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        maxLines = 5,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged { state ->
-                                if (state.isFocused && isVoiceListening) {
-                                    onCancelVoiceInput()
+            Column(modifier = Modifier.fillMaxWidth()) {
+                AnimatedVisibility(visible = hasAttachments || importingAttachments) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            items(pendingAttachments, key = { it.attachment.id }) { item ->
+                                PendingAttachmentCard(
+                                    item = item,
+                                    onPreview = {
+                                        val att = item.attachment
+                                        val paths = when {
+                                            att.pageImagePaths.isNotEmpty() -> att.pageImagePaths
+                                            !att.localPath.isNullOrBlank() -> listOf(att.localPath)
+                                            else -> emptyList()
+                                        }
+                                        if (paths.isNotEmpty()) {
+                                            lightboxData = ImageLightboxData(paths = paths, title = att.displayName)
+                                        }
+                                    },
+                                    onRemove = { onRemoveAttachment(item.attachment.id) },
+                                )
+                            }
+                            if (importingAttachments) {
+                                item(key = "importing_indicator") {
+                                    Row(
+                                        modifier = Modifier
+                                            .height(60.dp)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                                            .padding(horizontal = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(15.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                        Text(
+                                            text = "读取中…",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
-                            },
-                    )
-                }
+                            }
+                        }
 
-                Spacer(Modifier.width(8.dp))
-
-                if (isRunning) {
-                    Surface(
-                        onClick = onStopRun,
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                        modifier = Modifier.size(38.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.Rounded.Stop,
-                                contentDescription = "立即停止",
-                                modifier = Modifier.size(18.dp),
+                        if (modelLacksVision) {
+                            Text(
+                                text = "当前模型不支持看图，请先点上方切换支持视觉的模型",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
                             )
                         }
                     }
                 }
 
-                if (!isRunning && (inputText.isBlank() || isVoiceListening)) {
-                    ChatMicButton(
-                        listening = isVoiceListening,
-                        onClick = onToggleVoiceInput,
-                    )
-                }
-
-                if (inputText.isNotBlank()) {
-                    if (isRunning || isVoiceListening) Spacer(Modifier.width(6.dp))
-                    val canSend = piReady
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
                     Surface(
-                        onClick = {
-                            if (canSend) {
-                                if (isVoiceListening) onCancelVoiceInput()
-                                val toSend = inputText
-                                onInputTextChange("")
-                                autoFollowBottom = true
-                                onSendMessage(toSend)
-                                scope.launch {
-                                    listState.animateScrollToItem(bottomAnchorIndex)
-                                }
-                            }
-                        },
+                        onClick = { showAttachmentSheet = true },
                         shape = CircleShape,
-                        color = if (canSend) {
-                            MaterialTheme.colorScheme.primary
+                        color = if (hasAttachments) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
                         } else {
                             MaterialTheme.colorScheme.surfaceContainerLow
                         },
-                        contentColor = if (canSend) {
-                            MaterialTheme.colorScheme.onPrimary
+                        contentColor = if (hasAttachments) {
+                            MaterialTheme.colorScheme.primary
                         } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                            MaterialTheme.colorScheme.onSurfaceVariant
                         },
                         modifier = Modifier.size(38.dp),
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                Icons.Rounded.ArrowUpward,
-                                contentDescription = "发送",
-                                modifier = Modifier.size(18.dp),
+                                Icons.Rounded.Add,
+                                contentDescription = "添加图片或文件",
+                                modifier = Modifier.size(20.dp),
                             )
+                        }
+                    }
+
+                    Spacer(Modifier.width(10.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 9.dp),
+                    ) {
+                        if (inputText.isEmpty()) {
+                            Text(
+                                text = when {
+                                    isVoiceListening -> "聆听中…"
+                                    hasAttachments -> "添加说明，或直接发送…"
+                                    isCurrentSessionRunning -> "输入可随时补充…"
+                                    backgroundRunningSession != null -> "后台有任务运行中…"
+                                    else -> "问 Zai…"
+                                },
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (isVoiceListening) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                                },
+                            )
+                        }
+                        BasicTextField(
+                            value = inputText,
+                            onValueChange = { next ->
+                                if (isVoiceListening) onCancelVoiceInput()
+                                onInputTextChange(next)
+                            },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            maxLines = 5,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { state ->
+                                    if (state.isFocused && isVoiceListening) {
+                                        onCancelVoiceInput()
+                                    }
+                                },
+                        )
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    if (isRunning) {
+                        Surface(
+                            onClick = onStopRun,
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                            modifier = Modifier.size(38.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Rounded.Stop,
+                                    contentDescription = "立即停止",
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    if (!isRunning && (!hasPayloadToSend || isVoiceListening)) {
+                        ChatMicButton(
+                            listening = isVoiceListening,
+                            onClick = onToggleVoiceInput,
+                        )
+                    }
+
+                    if (hasPayloadToSend) {
+                        if (isRunning || isVoiceListening) Spacer(Modifier.width(6.dp))
+                        val canSend = piReady && !importingAttachments
+                        Surface(
+                            onClick = {
+                                if (canSend) {
+                                    if (isVoiceListening) onCancelVoiceInput()
+                                    val toSendText = inputText
+                                    val toSendAttachments = pendingAttachments
+                                    val sent = onSendMessage(toSendText, toSendAttachments)
+                                    if (sent) {
+                                        onInputTextChange("")
+                                        autoFollowBottom = true
+                                        scope.launch {
+                                            listState.animateScrollToItem(bottomAnchorIndex)
+                                        }
+                                    }
+                                }
+                            },
+                            shape = CircleShape,
+                            color = if (canSend) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            contentColor = if (canSend) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                            },
+                            modifier = Modifier.size(38.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Rounded.ArrowUpward,
+                                    contentDescription = "发送",
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    // Attachment source picker sheet
+    if (showAttachmentSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val hasClipImg = remember(showAttachmentSheet) { AttachmentManager.hasClipboardImage(context) }
+        ModalBottomSheet(
+            onDismissRequest = { showAttachmentSheet = false },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .navigationBarsPadding(),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "添加附件",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "支持图片、PDF、Word / Excel / PPT、代码与文本 · 单条最多 ${AttachmentManager.MAX_ATTACHMENTS_PER_MESSAGE} 个",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    AttachmentSourceTile(
+                        icon = Icons.Rounded.PhotoLibrary,
+                        title = "相册图片",
+                        subtitle = "单张或多张",
+                        onClick = {
+                            showAttachmentSheet = false
+                            onPickImages()
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    AttachmentSourceTile(
+                        icon = Icons.Rounded.PhotoCamera,
+                        title = "拍照",
+                        subtitle = "即拍即发",
+                        onClick = {
+                            showAttachmentSheet = false
+                            onTakePhoto()
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    AttachmentSourceTile(
+                        icon = Icons.Rounded.AttachFile,
+                        title = "选择文件",
+                        subtitle = "PDF / 文档 / 代码",
+                        onClick = {
+                            showAttachmentSheet = false
+                            onPickFiles()
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    AttachmentSourceTile(
+                        icon = Icons.Rounded.ContentPaste,
+                        title = "粘贴图片",
+                        subtitle = if (hasClipImg) "剪贴板有图片" else "读取剪贴板截图",
+                        accent = hasClipImg,
+                        onClick = {
+                            showAttachmentSheet = false
+                            onPasteClipboardImage()
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+    }
+
+    // Full-screen lightbox preview for images & rendered PDF pages
+    lightboxData?.let { data ->
+        ImageLightboxDialog(
+            data = data,
+            onDismiss = { lightboxData = null },
+        )
     }
 
     // Current-session model picker sheet
@@ -1197,31 +1493,517 @@ private fun EditorialEmptyCanvas(
     }
 }
 
+private data class ImageLightboxData(
+    val paths: List<String>,
+    val title: String,
+    val initialIndex: Int = 0,
+)
+
 @Composable
-private fun UserBubble(text: String) {
+private fun AttachmentSourceTile(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    accent: Boolean = false,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        color = if (accent) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
+        border = BorderStroke(
+            0.6.dp,
+            if (accent) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+            else MaterialTheme.colorScheme.outlineVariant,
+        ),
+        modifier = modifier,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(
+                        if (accent) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        else MaterialTheme.colorScheme.surface,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = if (accent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (accent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PendingAttachmentCard(
+    item: PendingAttachment,
+    onPreview: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val att = item.attachment
+    if (att.kind == AttachmentKind.IMAGE) {
+        Box(modifier = Modifier.size(62.dp)) {
+            LocalImageThumbnail(
+                path = att.localPath,
+                contentDescription = att.displayName,
+                maxSidePx = 280,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                    .clickable(onClick = onPreview),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(3.dp)
+                    .size(19.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.65f))
+                    .clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "移除附件",
+                    tint = Color.White,
+                    modifier = Modifier.size(12.dp),
+                )
+            }
+        }
+    } else {
+        val hasVisualPreview = !att.localPath.isNullOrBlank() || att.pageImagePaths.isNotEmpty()
+        Row(
+            modifier = Modifier
+                .height(62.dp)
+                .widthIn(min = 132.dp, max = 220.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                .clickable(enabled = hasVisualPreview, onClick = onPreview)
+                .padding(start = 8.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (!att.localPath.isNullOrBlank()) {
+                LocalImageThumbnail(
+                    path = att.localPath,
+                    contentDescription = att.displayName,
+                    maxSidePx = 200,
+                    modifier = Modifier
+                        .size(width = 36.dp, height = 46.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surface),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (att.mimeType == "application/pdf") {
+                            Icons.Rounded.PictureAsPdf
+                        } else {
+                            Icons.Rounded.Description
+                        },
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = att.displayName,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = att.metaLabel.ifBlank { AttachmentManager.formatFileSize(att.sizeBytes) },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "移除文件",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalImageThumbnail(
+    path: String?,
+    contentDescription: String,
+    maxSidePx: Int = 360,
+    contentScale: ContentScale = ContentScale.Crop,
+    modifier: Modifier = Modifier,
+) {
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, path, maxSidePx) {
+        value = if (path.isNullOrBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                AttachmentManager.loadThumbnailBitmap(path, maxSidePx)?.asImageBitmap()
+            }
+        }
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap!!,
+            contentDescription = contentDescription,
+            contentScale = contentScale,
+            modifier = modifier,
+        )
+    } else {
+        Box(
+            modifier = modifier.background(MaterialTheme.colorScheme.surfaceContainerLow),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Rounded.Image,
+                contentDescription = contentDescription,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ImageLightboxDialog(
+    data: ImageLightboxData,
+    onDismiss: () -> Unit,
+) {
+    var pageIdx by remember(data) { mutableIntStateOf(data.initialIndex.coerceIn(0, (data.paths.size - 1).coerceAtLeast(0))) }
+    val currentPath = data.paths.getOrNull(pageIdx)
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, currentPath) {
+        value = if (currentPath.isNullOrBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                AttachmentManager.loadPreviewBitmap(currentPath, 1600)?.asImageBitmap()
+            }
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.94f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                )
+                .statusBarsPadding()
+                .navigationBarsPadding(),
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap!!,
+                    contentDescription = data.title,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp, vertical = 64.dp),
+                )
+            } else {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+
+            // Top bar with title and close button
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (data.paths.size > 1) "${data.title} (${pageIdx + 1}/${data.paths.size})" else data.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(12.dp))
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.14f))
+                        .clickable(onClick = onDismiss),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "关闭预览",
+                        tint = Color.White,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            }
+
+            // Multi-page switcher for PDF pages or multi-image attachments
+            if (data.paths.size > 1) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 20.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color.White.copy(alpha = 0.14f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {},
+                        )
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TextButton(
+                        enabled = pageIdx > 0,
+                        onClick = { if (pageIdx > 0) pageIdx-- },
+                    ) {
+                        Text("上一页", color = if (pageIdx > 0) Color.White else Color.White.copy(alpha = 0.35f))
+                    }
+                    Text(
+                        text = "${pageIdx + 1} / ${data.paths.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.White,
+                    )
+                    TextButton(
+                        enabled = pageIdx < data.paths.lastIndex,
+                        onClick = { if (pageIdx < data.paths.lastIndex) pageIdx++ },
+                    ) {
+                        Text("下一页", color = if (pageIdx < data.paths.lastIndex) Color.White else Color.White.copy(alpha = 0.35f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UserBubble(
+    message: ChatMessage,
+    onOpenLightbox: (ImageLightboxData) -> Unit,
+) {
     val bubbleBg = MaterialTheme.colorScheme.surfaceVariant
     val bubbleFg = MaterialTheme.colorScheme.onSurface
+    val imageAttachments = remember(message.attachments) {
+        message.attachments.filter { it.kind == AttachmentKind.IMAGE }
+    }
+    val fileAttachments = remember(message.attachments) {
+        message.attachments.filter { it.kind == AttachmentKind.FILE }
+    }
 
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = 20.dp,
-                topEnd = 20.dp,
-                bottomStart = 20.dp,
-                bottomEnd = 6.dp,
-            ),
-            color = bubbleBg,
-            contentColor = bubbleFg,
-            modifier = Modifier.widthIn(max = 290.dp),
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
-            )
+        if (imageAttachments.isNotEmpty()) {
+            val allPaths = imageAttachments.mapNotNull { it.localPath }
+            if (imageAttachments.size == 1) {
+                val img = imageAttachments.first()
+                LocalImageThumbnail(
+                    path = img.localPath,
+                    contentDescription = img.displayName,
+                    maxSidePx = 560,
+                    modifier = Modifier
+                        .size(width = 186.dp, height = 148.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                        .clickable(enabled = !img.localPath.isNullOrBlank()) {
+                            img.localPath?.let { path ->
+                                onOpenLightbox(ImageLightboxData(paths = listOf(path), title = img.displayName))
+                            }
+                        },
+                )
+            } else {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.widthIn(max = 290.dp),
+                ) {
+                    itemsIndexed(imageAttachments, key = { _, att -> att.id }) { idx, img ->
+                        LocalImageThumbnail(
+                            path = img.localPath,
+                            contentDescription = img.displayName,
+                            maxSidePx = 360,
+                            modifier = Modifier
+                                .size(104.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                                .clickable(enabled = allPaths.isNotEmpty()) {
+                                    onOpenLightbox(
+                                        ImageLightboxData(
+                                            paths = allPaths,
+                                            title = img.displayName,
+                                            initialIndex = idx.coerceAtMost(allPaths.lastIndex),
+                                        ),
+                                    )
+                                },
+                        )
+                    }
+                }
+            }
+        }
+
+        if (fileAttachments.isNotEmpty()) {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                fileAttachments.forEach { fileAtt ->
+                    val previewPaths = when {
+                        fileAtt.pageImagePaths.isNotEmpty() -> fileAtt.pageImagePaths
+                        !fileAtt.localPath.isNullOrBlank() -> listOf(fileAtt.localPath)
+                        else -> emptyList()
+                    }
+                    Surface(
+                        onClick = {
+                            if (previewPaths.isNotEmpty()) {
+                                onOpenLightbox(ImageLightboxData(paths = previewPaths, title = fileAtt.displayName))
+                            }
+                        },
+                        enabled = previewPaths.isNotEmpty(),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.widthIn(max = 270.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        ) {
+                            if (!fileAtt.localPath.isNullOrBlank()) {
+                                LocalImageThumbnail(
+                                    path = fileAtt.localPath,
+                                    contentDescription = fileAtt.displayName,
+                                    maxSidePx = 160,
+                                    modifier = Modifier
+                                        .size(width = 30.dp, height = 38.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp)),
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = if (fileAtt.mimeType == "application/pdf") {
+                                        Icons.Rounded.PictureAsPdf
+                                    } else {
+                                        Icons.Rounded.Description
+                                    },
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text(
+                                    text = fileAtt.displayName,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = fileAtt.metaLabel.ifBlank { AttachmentManager.formatFileSize(fileAtt.sizeBytes) },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (message.text.isNotBlank()) {
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = 20.dp,
+                    topEnd = 20.dp,
+                    bottomStart = 20.dp,
+                    bottomEnd = 6.dp,
+                ),
+                color = bubbleBg,
+                contentColor = bubbleFg,
+                modifier = Modifier.widthIn(max = 290.dp),
+            ) {
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
+                )
+            }
         }
     }
 }
@@ -1438,6 +2220,14 @@ private fun shareSessionAsMarkdown(context: android.content.Context, session: Ch
                 MessageRole.SYSTEM_NOTE -> "## 系统记录"
             }
             append(heading).append("\n\n")
+            if (msg.attachments.isNotEmpty()) {
+                for (att in msg.attachments) {
+                    val label = if (att.kind == AttachmentKind.IMAGE) "图片" else "文件"
+                    val meta = att.metaLabel.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                    append("[").append(label).append("：").append(att.displayName).append(meta).append("]\n")
+                }
+                append("\n")
+            }
             if (msg.text.isNotBlank()) {
                 append(msg.text.trim()).append("\n\n")
             }

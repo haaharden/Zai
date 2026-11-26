@@ -69,6 +69,7 @@ export function pruneScreens(
   messages: AgentMessage[],
   keepTextScreens: number = 2,
   keepImages: number = 1,
+  keepUserImageTurns: number = 3,
 ): AgentMessage[] {
   const textOf = (m: any): string =>
     Array.isArray(m.content) ? (m.content.find((c: any) => c.type === "text")?.text ?? "") : "";
@@ -82,7 +83,7 @@ export function pruneScreens(
     )
     .filter((i) => i >= 0);
 
-  const imageIndexes = messages
+  const toolImageIndexes = messages
     .map((m: any, idx) =>
       m.role === "toolResult" &&
       Array.isArray(m.content) &&
@@ -92,9 +93,24 @@ export function pruneScreens(
     )
     .filter((i) => i >= 0);
 
+  const userImageIndexes = messages
+    .map((m: any, idx) =>
+      m.role === "user" &&
+      Array.isArray(m.content) &&
+      m.content.some((c: any) => c?.type === "image")
+        ? idx
+        : -1,
+    )
+    .filter((i) => i >= 0);
+
   const dropTextSet = new Set(screenIndexes.slice(0, Math.max(0, screenIndexes.length - keepTextScreens)));
-  const dropImageSet = new Set(imageIndexes.slice(0, Math.max(0, imageIndexes.length - keepImages)));
-  if (dropTextSet.size === 0 && dropImageSet.size === 0) return messages;
+  const dropToolImageSet = new Set(toolImageIndexes.slice(0, Math.max(0, toolImageIndexes.length - keepImages)));
+  const dropUserImageSet = new Set(
+    userImageIndexes.slice(0, Math.max(0, userImageIndexes.length - keepUserImageTurns)),
+  );
+  if (dropTextSet.size === 0 && dropToolImageSet.size === 0 && dropUserImageSet.size === 0) {
+    return messages;
+  }
 
   return messages.map((m: any, idx) => {
     if (dropTextSet.has(idx)) {
@@ -104,11 +120,19 @@ export function pruneScreens(
         : `[earlier ${m.toolName} output omitted; screen has changed]`;
       return { ...m, content: [{ type: "text", text: trimmed }] };
     }
-    if (dropImageSet.has(idx) && Array.isArray(m.content)) {
+    if (dropToolImageSet.has(idx) && Array.isArray(m.content)) {
       return {
         ...m,
         content: m.content.map((c: any) =>
           c?.type === "image" ? { type: "text", text: "[earlier screenshot omitted]" } : c,
+        ),
+      };
+    }
+    if (dropUserImageSet.has(idx) && Array.isArray(m.content)) {
+      return {
+        ...m,
+        content: m.content.map((c: any) =>
+          c?.type === "image" ? { type: "text", text: "[earlier attached image omitted]" } : c,
         ),
       };
     }
@@ -117,18 +141,17 @@ export function pruneScreens(
 }
 
 export async function pruneOldScreens(messages: AgentMessage[]): Promise<AgentMessage[]> {
-  return pruneScreens(messages, 2, 1);
+  return pruneScreens(messages, 2, 1, 3);
 }
 
 export function savableTranscript(messages: AgentMessage[]) {
-  return pruneScreens(messages, 2, 0).flatMap((m: any) => {
+  return pruneScreens(messages, 2, 0, 0).flatMap((m: any) => {
     if (m.role === "system") return [];
     if (!Array.isArray(m.content) || !m.content.some((c: any) => c.type === "image")) return m;
+    const placeholder = m.role === "user" ? "[attached image]" : "[screenshot omitted]";
     return {
       ...m,
-      content: m.content.map((c: any) =>
-        c.type === "image" ? { type: "text", text: "[screenshot omitted]" } : c,
-      ),
+      content: m.content.map((c: any) => (c.type === "image" ? { type: "text", text: placeholder } : c)),
     };
   });
 }

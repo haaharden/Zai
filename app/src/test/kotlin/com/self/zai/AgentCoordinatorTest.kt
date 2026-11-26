@@ -12,7 +12,9 @@ import com.self.zai.data.SessionRepository
 import com.self.zai.data.SettingsStore
 import com.self.zai.mcp.McpToolClient
 import com.self.zai.model.AppSettings
+import com.self.zai.model.AttachmentKind
 import com.self.zai.model.AuthUiState
+import com.self.zai.model.ChatAttachment
 import com.self.zai.model.ChatSession
 import com.self.zai.model.CompactionMode
 import com.self.zai.model.CustomProviderConfig
@@ -20,6 +22,8 @@ import com.self.zai.model.McpServerConfig
 import com.self.zai.model.McpToolSummary
 import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
+import com.self.zai.model.PendingAttachment
+import com.self.zai.model.PromptImage
 import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.model.SessionContextUsage
@@ -473,6 +477,111 @@ class AgentCoordinatorTest {
         override fun loadPiCredentialsJson(): String? = map["creds"]
     }
 
+    @Test
+    fun coordinator_sendUserMessage_forwardsImagesAndFiles_andGuardsTextOnlyModel() = runBlocking {
+        val repo = InMemorySessionRepository()
+        val vault = InMemoryVault()
+        val runtime = FakeAgentRuntime()
+        val chrome = FakeChromeHost()
+        val navigator = FakeReturnNavigator(shouldSucceed = true)
+
+        val visionModel = ModelOption(
+            providerId = "custom_p",
+            providerName = "Custom",
+            id = "vision-1",
+            name = "Vision 1",
+            contextWindow = 128_000,
+            supportsImages = true,
+            thinkingLevels = listOf("off"),
+        )
+        val textOnlyModel = ModelOption(
+            providerId = "custom_p",
+            providerName = "Custom",
+            id = "text-1",
+            name = "Text Only",
+            contextWindow = 128_000,
+            supportsImages = false,
+            thinkingLevels = listOf("off"),
+        )
+        runtime.setProviders(
+            listOf(
+                ProviderStatus(
+                    id = "custom_p",
+                    name = "Custom",
+                    credentialType = "api_key",
+                    isCustom = true,
+                    supportsOAuth = false,
+                    models = listOf(textOnlyModel, visionModel),
+                ),
+            ),
+        )
+
+        val phoneController = PhoneController(repo, StubDeviceChannel(), StubAppDirectory())
+        val dispatcher = AgentToolDispatcher(repo, vault, phoneController, StubMcpClient())
+        lateinit var coordinator: AgentCoordinator
+        val modelSelection = ModelSelectionManager(repo, vault, runtime) { coordinator.invalidateSessionConfig(it) }
+        coordinator = AgentCoordinator(
+            repository = repo,
+            credentialVault = vault,
+            runtime = runtime,
+            phoneController = phoneController,
+            toolDispatcher = dispatcher,
+            mcpClient = StubMcpClient(),
+            modelSelection = modelSelection,
+            returnNavigator = navigator,
+            chromeHost = chrome,
+            mainDispatcher = Dispatchers.Unconfined,
+        )
+
+        val photo = PendingAttachment(
+            attachment = ChatAttachment(
+                id = "att_img",
+                kind = AttachmentKind.IMAGE,
+                displayName = "receipt.jpg",
+                mimeType = "image/jpeg",
+                sizeBytes = 512,
+                localPath = "/tmp/receipt.jpg",
+            ),
+            promptImages = listOf(PromptImage("ZmFrZQ==", "image/jpeg")),
+        )
+        val txtFile = PendingAttachment(
+            attachment = ChatAttachment(
+                id = "att_txt",
+                kind = AttachmentKind.FILE,
+                displayName = "log.txt",
+                mimeType = "text/plain",
+                sizeBytes = 120,
+            ),
+            extractedText = "ERROR line 42",
+        )
+
+        // 1. Text-only model rejects image attachments cleanly without mutating session messages
+        coordinator.selectSessionModel("custom_p", "text-1")
+        val blocked = coordinator.sendUserMessage("", attachments = listOf(photo))
+        assertTrue(blocked.isFailure)
+        assertTrue(coordinator.currentSession().messages.isEmpty())
+
+        // 2. Text-only model DOES allow pure text file attachments
+        val textFileOk = coordinator.sendUserMessage("看看这个报错", attachments = listOf(txtFile))
+        assertTrue(textFileOk.isSuccess)
+        assertTrue(runtime.lastPromptText.contains("[附件文件：log.txt"))
+        assertTrue(runtime.lastPromptText.contains("ERROR line 42"))
+        assertTrue(runtime.lastPromptImages.isEmpty())
+        runtime.emit(PiSessionEvent.Idle(coordinator.currentSession().id))
+
+        // 3. Vision model forwards image payload even when user text is empty
+        val visionSession = coordinator.startNewSession()
+        coordinator.selectSessionModel("custom_p", "vision-1")
+        val imgOk = coordinator.sendUserMessage("", attachments = listOf(photo))
+        assertTrue(imgOk.isSuccess)
+        assertEquals(1, runtime.lastPromptImages.size)
+        assertEquals("ZmFrZQ==", runtime.lastPromptImages.first().dataBase64)
+        val savedSession = repo.sessions.value.first { it.id == visionSession.id }
+        assertEquals("图片分析", savedSession.title)
+        assertEquals(1, savedSession.messages.first().attachments.size)
+        assertEquals("receipt.jpg", savedSession.messages.first().attachments.first().displayName)
+    }
+
     private class FakeAgentRuntime : AgentRuntime {
         override val isReady = MutableStateFlow(true)
         override val piVersion = MutableStateFlow("1.6.0")
@@ -489,6 +598,8 @@ class AgentCoordinatorTest {
         var compactCount = 0
         var lastCompactionMode = ""
         var lastCompactionThreshold = 0
+        var lastPromptText = ""
+        var lastPromptImages: List<PromptImage> = emptyList()
         val abortedSessionIds = mutableListOf<String>()
 
         fun setProviders(list: List<ProviderStatus>) { _providers.value = list }
@@ -521,7 +632,14 @@ class AgentCoordinatorTest {
             lastCompactionMode = compactionMode
             lastCompactionThreshold = compactionThresholdPercent
         }
-        override fun prompt(sessionId: String, text: String) {}
+        override fun prompt(sessionId: String, text: String) {
+            lastPromptText = text
+            lastPromptImages = emptyList()
+        }
+        override fun prompt(sessionId: String, text: String, images: List<PromptImage>) {
+            lastPromptText = text
+            lastPromptImages = images
+        }
         override fun compactSession(sessionId: String) { compactCount++ }
         override fun abort(sessionId: String) { abortedSessionIds += sessionId }
         override fun disposeSession(sessionId: String) {}

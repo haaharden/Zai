@@ -61,6 +61,7 @@ class AndroidCompositeDeviceChannel(
     private val shizuku: ShizukuBridge,
     private val onHideOverlayForCapture: (Boolean) -> Unit,
     private val onTapVisualMarker: (x: Int, y: Int) -> Unit,
+    private val onEnsureAccessibilityReady: (suspend () -> Unit)? = null,
 ) : PhoneDeviceChannel {
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -78,17 +79,26 @@ class AndroidCompositeDeviceChannel(
         if (!settings.autoRestoreAccessibility) return
         if (ZaiAccessibilityService.isReallyConnected()) return
 
+        onEnsureAccessibilityReady?.let {
+            it.invoke()
+            return
+        }
+
         if (DevicePermissionHelper.hasWriteSecureSettings(context)) {
             if (DevicePermissionHelper.restoreAccessibilityViaSecureSettings(context).isSuccess) {
-                delay(450L)
-                if (ZaiAccessibilityService.isReallyConnected()) return
+                return
             }
         }
 
         if (!shizuku.status.value.isReady) return
-        val component = ComponentName(context, ZaiAccessibilityService::class.java).flattenToString()
-        if (shizuku.restoreAccessibilityService(component).isSuccess) {
-            delay(450L)
+        val component = ComponentName(context, ZaiAccessibilityService::class.java)
+        if (shizuku.restoreAccessibilityService(
+                fullComponent = component.flattenToString(),
+                shortComponent = component.flattenToShortString(),
+                forceRebind = true,
+            ).isSuccess
+        ) {
+            DevicePermissionHelper.awaitAccessibilityConnected(1_500L)
         }
     }
 

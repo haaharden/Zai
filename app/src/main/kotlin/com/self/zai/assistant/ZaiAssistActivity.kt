@@ -85,6 +85,8 @@ class ZaiAssistActivity : ComponentActivity() {
 
         val app = application as ZaiApplication
         val container = app.container
+        ZaiAccessibilityService.isReallyConnected()
+        container.autoRestoreAccessibilityIfPossible()
         val settings = container.sessionRepository.settings.value
 
         val unlockHandler: suspend (String) -> Boolean = { reason -> requestUnlockForSensitiveTool(reason) }
@@ -260,6 +262,8 @@ class ZaiAssistActivity : ComponentActivity() {
             return
         }
         val app = application as ZaiApplication
+        ZaiAccessibilityService.isReallyConnected()
+        app.container.autoRestoreAccessibilityIfPossible()
         visibleState.value = true
         AssistantContextBridge.overlayOpenedAtMs = System.currentTimeMillis()
         if (isDeviceLocked()) {

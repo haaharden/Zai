@@ -6,8 +6,10 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.IBinder
 import com.self.zai.BuildConfig
+import com.self.zai.permission.DevicePermissionHelper
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -246,20 +248,42 @@ class ShizukuBridge(private val context: Context) {
         exec("monkey -p ${shellQuote(packageName)} -c android.intent.category.LAUNCHER 1", 6_000)
 
     /**
-     * Restores Zai's AccessibilityService via secure settings while preserving all other enabled services.
+     * Grants `WRITE_SECURE_SETTINGS` permanently to Zai via Shizuku so future accessibility
+     * self-healing survives reboots without needing Shizuku running.
      */
-    suspend fun restoreAccessibilityService(componentName: String): Result<Unit> {
+    suspend fun grantWriteSecureSettings(packageName: String = context.packageName): Result<Unit> =
+        exec("pm grant ${shellQuote(packageName)} android.permission.WRITE_SECURE_SETTINGS", 5_000)
+            .map { Unit }
+
+    /**
+     * Restores Zai's AccessibilityService via secure settings while preserving all other enabled services.
+     * When the service is already listed but unbound, toggles it off briefly before re-enabling so
+     * Android's AccessibilityManagerService reliably triggers a fresh bind.
+     */
+    suspend fun restoreAccessibilityService(
+        fullComponent: String,
+        shortComponent: String = fullComponent,
+        forceRebind: Boolean = true,
+    ): Result<Unit> {
         val currentRaw = exec("settings get secure enabled_accessibility_services", 4_000)
             .getOrElse { return Result.failure(it) }
             .trim()
-        val existing = if (currentRaw.isBlank() || currentRaw == "null") {
-            emptyList()
-        } else {
-            currentRaw.split(":").map { it.trim() }.filter { it.isNotEmpty() }
+        val plan = DevicePermissionHelper.buildAccessibilityRestorePlan(
+            rawEnabledServices = currentRaw,
+            fullComponent = fullComponent,
+            shortComponent = shortComponent,
+        )
+        if (plan.alreadyPresent && forceRebind) {
+            val clearCmd = if (plan.withoutSelf.isEmpty()) {
+                "settings delete secure enabled_accessibility_services"
+            } else {
+                "settings put secure enabled_accessibility_services ${shellQuote(plan.withoutSelf)}"
+            }
+            exec(clearCmd, 4_000).getOrElse { return Result.failure(it) }
+            delay(180L)
         }
-        val merged = (existing.filterNot { it == componentName } + componentName).joinToString(":")
         val putRes = exec(
-            "settings put secure enabled_accessibility_services ${shellQuote(merged)} && settings put secure accessibility_enabled 1",
+            "settings put secure enabled_accessibility_services ${shellQuote(plan.withSelf)} && settings put secure accessibility_enabled 1",
             5_000,
         )
         return putRes.map { Unit }

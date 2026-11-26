@@ -118,6 +118,7 @@ fun SettingsScreen(
     onRequestShizuku: () -> Unit,
     onTestShizuku: suspend () -> Result<String>,
     onRepairAccessibility: suspend () -> Result<Unit>,
+    onGrantWriteSecureViaShizuku: suspend () -> Result<Unit> = { Result.failure(UnsupportedOperationException()) },
     onShizukuInstallApk: suspend (File) -> Result<String>,
     onReloadPiHotUpdate: () -> Unit,
     onResetPiHotUpdate: () -> Unit,
@@ -144,6 +145,7 @@ fun SettingsScreen(
     var showAdvancedControl by remember { mutableStateOf(false) }
     var showSystemPerms by remember { mutableStateOf(false) }
     var showRepoEditor by remember { mutableStateOf(false) }
+    var repairingA11y by remember { mutableStateOf(false) }
 
     var repoInput by remember(settings.githubUpdateRepo) { mutableStateOf(settings.githubUpdateRepo) }
     var updateChecking by remember { mutableStateOf(false) }
@@ -443,28 +445,42 @@ fun SettingsScreen(
                     dotColor = a11yColor,
                     title = "无障碍服务",
                     statusText = when {
+                        repairingA11y -> "恢复中…"
                         accessibilityConnected -> "已连接"
                         a11ySettingOn -> "已脱绑"
                         else -> "未开启"
                     },
                     actionLabel = when {
+                        repairingA11y -> "恢复中"
                         canAutoRepair -> "恢复"
                         accessibilityConnected -> "管理"
                         else -> "去开启"
                     },
                     onAction = {
-                        if (canAutoRepair) {
-                            scope.launch {
-                                val res = onRepairAccessibility()
-                                val msg = res.fold(
-                                    onSuccess = { "已恢复无障碍" },
-                                    onFailure = { "恢复失败：${it.message}" },
-                                )
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                if (res.isFailure) DevicePermissionHelper.openAccessibilitySettings(context)
+                        if (!repairingA11y) {
+                            if (canAutoRepair) {
+                                repairingA11y = true
+                                scope.launch {
+                                    val res = onRepairAccessibility()
+                                    repairingA11y = false
+                                    hasWriteSecure = DevicePermissionHelper.hasWriteSecureSettings(context)
+                                    a11ySettingOn = DevicePermissionHelper.isAccessibilityEnabledInSettings(context)
+                                    val msg = res.fold(
+                                        onSuccess = { "已恢复无障碍" },
+                                        onFailure = { "恢复失败：${it.message}" },
+                                    )
+                                    Toast.makeText(
+                                        context,
+                                        msg,
+                                        if (res.isFailure) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+                                    ).show()
+                                    if (res.isFailure) {
+                                        DevicePermissionHelper.openAccessibilitySettings(context, showGuideToast = false)
+                                    }
+                                }
+                            } else {
+                                DevicePermissionHelper.openAccessibilitySettings(context)
                             }
-                        } else {
-                            DevicePermissionHelper.openAccessibilitySettings(context)
                         }
                     },
                 )
@@ -542,15 +558,37 @@ fun SettingsScreen(
 
                         ZaiInsetDivider()
                         val grantCmd = "adb shell pm grant com.self.zai android.permission.WRITE_SECURE_SETTINGS"
+                        val canGrantViaShizuku = !hasWriteSecure && shizukuStatus.isReady
                         CompactStatusRow(
                             dotColor = if (hasWriteSecure) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
                             title = "ADB 永久自愈",
                             statusText = if (hasWriteSecure) "已授权" else "未授权",
-                            actionLabel = if (hasWriteSecure) "复制" else "复制命令",
+                            actionLabel = when {
+                                hasWriteSecure -> "复制"
+                                canGrantViaShizuku -> "Shizuku 授权"
+                                else -> "复制命令"
+                            },
                             onAction = {
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                cm.setPrimaryClip(ClipData.newPlainText("Zai ADB", grantCmd))
-                                Toast.makeText(context, "已复制命令", Toast.LENGTH_SHORT).show()
+                                if (canGrantViaShizuku) {
+                                    scope.launch {
+                                        val res = onGrantWriteSecureViaShizuku()
+                                        hasWriteSecure = DevicePermissionHelper.hasWriteSecureSettings(context)
+                                        if (res.isSuccess && hasWriteSecure) {
+                                            Toast.makeText(context, "已永久授予自愈权限（重启依然有效）", Toast.LENGTH_SHORT).show()
+                                            if (!accessibilityConnected) {
+                                                onRepairAccessibility()
+                                                a11ySettingOn = DevicePermissionHelper.isAccessibilityEnabledInSettings(context)
+                                            }
+                                        } else {
+                                            val err = res.exceptionOrNull()?.message ?: "授权未生效"
+                                            Toast.makeText(context, "Shizuku 授权失败：$err", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                } else {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    cm.setPrimaryClip(ClipData.newPlainText("Zai ADB", grantCmd))
+                                    Toast.makeText(context, "已复制命令", Toast.LENGTH_SHORT).show()
+                                }
                             },
                         )
 
@@ -965,23 +1003,41 @@ fun SettingsScreen(
                             else -> "未开启"
                         },
                         actionLabel = when {
+                            repairingA11y -> "恢复中"
                             controlReady -> "正常"
                             canAutoRepair -> "一键恢复"
                             else -> "去开启"
                         },
                         onAction = {
-                            when {
-                                controlReady -> Unit
-                                canAutoRepair -> scope.launch {
-                                    val res = onRepairAccessibility()
-                                    val msg = res.fold(
-                                        onSuccess = { "已恢复无障碍" },
-                                        onFailure = { "恢复失败：${it.message}" },
-                                    )
-                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                    if (res.isFailure) DevicePermissionHelper.openAccessibilitySettings(context)
+                            if (!repairingA11y) {
+                                when {
+                                    controlReady -> Unit
+                                    canAutoRepair -> {
+                                        repairingA11y = true
+                                        scope.launch {
+                                            val res = onRepairAccessibility()
+                                            repairingA11y = false
+                                            hasWriteSecure = DevicePermissionHelper.hasWriteSecureSettings(context)
+                                            a11ySettingOn = DevicePermissionHelper.isAccessibilityEnabledInSettings(context)
+                                            val msg = res.fold(
+                                                onSuccess = { "已恢复无障碍" },
+                                                onFailure = { "恢复失败：${it.message}" },
+                                            )
+                                            Toast.makeText(
+                                                context,
+                                                msg,
+                                                if (res.isFailure) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+                                            ).show()
+                                            if (res.isFailure) {
+                                                DevicePermissionHelper.openAccessibilitySettings(
+                                                    context,
+                                                    showGuideToast = false,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    else -> DevicePermissionHelper.openAccessibilitySettings(context)
                                 }
-                                else -> DevicePermissionHelper.openAccessibilitySettings(context)
                             }
                         },
                     )

@@ -158,21 +158,45 @@ export class SessionManager {
     compactor.emitUsage(extracted.messages);
   }
 
-  async runPrompt(sessionId: string, text: string) {
+  async runPrompt(
+    sessionId: string,
+    text: string,
+    images?: Array<{ data: string; mimeType?: string }>,
+  ) {
     const s = this.sessions.get(sessionId);
     if (!s) throw new Error(`会话 ${sessionId} 未初始化`);
+    const rawImages = Array.isArray(images)
+      ? images
+          .filter((img) => img && typeof img.data === "string" && img.data.length > 0)
+          .map((img) => ({
+            type: "image" as const,
+            data: img.data,
+            mimeType: img.mimeType || "image/jpeg",
+          }))
+      : [];
+    const modelSupportsImages = s.agent.state.model?.input?.includes("image") ?? false;
+    const validImages = modelSupportsImages ? rawImages : [];
+    const effectiveText =
+      !modelSupportsImages && rawImages.length > 0
+        ? `${text ? `${text}\n\n` : ""}[提示：当前所选模型不支持图片输入，已忽略附带的 ${rawImages.length} 张图片]`
+        : text;
+
     if (s.running) {
+      const content: any[] = [];
+      if (effectiveText) content.push({ type: "text", text: effectiveText });
+      for (const img of validImages) content.push(img);
+      if (content.length === 0) return;
       s.agent.steer({
         role: "user",
-        content: [{ type: "text", text }],
+        content,
         timestamp: Date.now(),
       } as AgentMessage);
-      bridge({ type: "steered", session: sessionId, text });
+      bridge({ type: "steered", session: sessionId, text: effectiveText });
       return;
     }
     s.running = true;
     try {
-      await s.agent.prompt(text);
+      await s.agent.prompt(effectiveText, validImages.length > 0 ? validImages : undefined);
       while (s.agent.hasQueuedMessages()) {
         await s.agent.continue();
       }

@@ -199,12 +199,42 @@ data class ActionStep(
 )
 
 @Serializable
+enum class AttachmentKind {
+    IMAGE,
+    FILE,
+}
+
+@Serializable
+data class ChatAttachment(
+    val id: String,
+    val kind: AttachmentKind,
+    val displayName: String,
+    val mimeType: String,
+    val sizeBytes: Long = 0L,
+    val localPath: String? = null,
+    val pageImagePaths: List<String> = emptyList(),
+    val metaLabel: String = "",
+)
+
+data class PromptImage(
+    val dataBase64: String,
+    val mimeType: String = "image/jpeg",
+)
+
+data class PendingAttachment(
+    val attachment: ChatAttachment,
+    val extractedText: String? = null,
+    val promptImages: List<PromptImage> = emptyList(),
+)
+
+@Serializable
 data class ChatMessage(
     val id: String,
     val role: MessageRole,
     val text: String = "",
     val thinking: String = "",
     val steps: List<ActionStep> = emptyList(),
+    val attachments: List<ChatAttachment> = emptyList(),
     val isError: Boolean = false,
     val timestampMs: Long = System.currentTimeMillis(),
 )

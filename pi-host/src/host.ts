@@ -152,7 +152,7 @@ const arg = (json: string) => JSON.parse(json);
   },
   prompt: (json: string) => {
     const a = arg(json);
-    guard("prompt", () => sessionManager.runPrompt(a.session, a.text), a.session);
+    guard("prompt", () => sessionManager.runPrompt(a.session, a.text ?? "", a.images), a.session);
   },
   abort: (json: string) => sessionManager.abort(arg(json).session),
   dispose: (json: string) => sessionManager.dispose(arg(json).session),

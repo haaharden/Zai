@@ -394,10 +394,18 @@ class ZaiAccessibilityService : AccessibilityService() {
         val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
         fun isReallyConnected(): Boolean {
-            val svc = instance ?: return false
-            return runCatching {
+            val svc = instance
+            if (svc == null) {
+                if (_isConnected.value) _isConnected.value = false
+                return false
+            }
+            val alive = runCatching {
                 svc.serviceInfo != null
             }.getOrDefault(false)
+            if (!alive && _isConnected.value) {
+                _isConnected.value = false
+            }
+            return alive
         }
     }
 }

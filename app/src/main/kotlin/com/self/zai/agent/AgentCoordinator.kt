@@ -1,5 +1,6 @@
 package com.self.zai.agent
 
+import com.self.zai.data.AttachmentManager
 import com.self.zai.data.CredentialVault
 import com.self.zai.data.SessionRepository
 import com.self.zai.mcp.McpToolClient
@@ -14,6 +15,7 @@ import com.self.zai.model.McpServerConfig
 import com.self.zai.model.McpToolSummary
 import com.self.zai.model.MessageRole
 import com.self.zai.model.ModelOption
+import com.self.zai.model.PendingAttachment
 import com.self.zai.model.SessionContextUsage
 import com.self.zai.model.SkillEntry
 import com.self.zai.model.StepState
@@ -70,6 +72,7 @@ class AgentCoordinator(
     private val onRepairAccessibility: suspend () -> Result<Unit> = { Result.failure(UnsupportedOperationException()) },
     private val onDismissAssistantOverlay: () -> Unit = {},
     private val isOverlayVisible: () -> Boolean = { false },
+    private val onSessionDeleted: (ChatSession) -> Unit = {},
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
@@ -173,6 +176,7 @@ class AgentCoordinator(
     }
 
     fun deleteSession(sessionId: String) {
+        val removedSession = repository.sessions.value.firstOrNull { it.id == sessionId }
         if (_runningSessionId.value == sessionId && _isRunning.value) {
             stopActiveRun()
         }
@@ -180,6 +184,9 @@ class AgentCoordinator(
         configuredSessions.remove(sessionId)
         _sessionContextUsages.value = _sessionContextUsages.value - sessionId
         repository.deleteSession(sessionId)
+        if (removedSession != null) {
+            runCatching { onSessionDeleted(removedSession) }
+        }
         if (_activeSessionId.value == sessionId) {
             _activeSessionId.value = ensureInitialSession().id
         }
@@ -410,9 +417,13 @@ class AgentCoordinator(
         ensureForegroundServiceRunning(capsuleLabel)
     }
 
-    fun sendUserMessage(rawText: String, extraContextForModel: String? = null): Result<Unit> {
+    fun sendUserMessage(
+        rawText: String,
+        extraContextForModel: String? = null,
+        attachments: List<PendingAttachment> = emptyList(),
+    ): Result<Unit> {
         val text = rawText.trim()
-        if (text.isEmpty()) return Result.success(Unit)
+        if (text.isEmpty() && attachments.isEmpty()) return Result.success(Unit)
         if (!runtime.isReady.value) {
             return Result.failure(IllegalStateException("Pi 引擎正在初始化，请稍候 1 秒再试"))
         }
@@ -420,6 +431,12 @@ class AgentCoordinator(
         val session = currentSession()
         val model = sessionModelOption(session)
             ?: return Result.failure(IllegalStateException("请先登录 ChatGPT，或添加供应商密钥与模型"))
+        val promptImages = attachments.flatMap { it.promptImages }
+        if (promptImages.isNotEmpty() && !model.supportsImages) {
+            return Result.failure(
+                IllegalStateException("当前模型「${model.name}」不支持看图，请先切换支持视觉的模型或移除图片/PDF附件"),
+            )
+        }
         val thinking = sessionThinkingLevel(session, model)
         val sessionId = session.id
         val currentSettings = repository.settings.value
@@ -440,25 +457,28 @@ class AgentCoordinator(
         } else {
             text
         }
+        val promptWithAttachments = AttachmentManager.buildPromptTextWithAttachments(basePrompt, attachments)
         val promptForPi = if (!extraContextForModel.isNullOrBlank()) {
             buildString {
                 appendLine("[用户附带的当前屏幕内容]")
                 appendLine(extraContextForModel.trim())
                 appendLine()
-                append(basePrompt)
+                append(promptWithAttachments)
             }
         } else {
-            basePrompt
+            promptWithAttachments
         }
 
+        val savedAttachments = attachments.map { it.attachment }
         val userMsg = ChatMessage(
             id = "m_${UUID.randomUUID().toString().take(8)}",
             role = MessageRole.USER,
             text = text,
+            attachments = savedAttachments,
         )
 
         val updatedTitle = if (session.messages.none { it.role == MessageRole.USER }) {
-            text.replace("\n", " ").take(20)
+            AttachmentManager.buildSessionTitleFromPrompt(text, savedAttachments)
         } else {
             session.title
         }
@@ -500,7 +520,7 @@ class AgentCoordinator(
                 )
             }
             _liveStepLabel.value = "思考中…"
-            runtime.prompt(sessionId, promptForPi)
+            runtime.prompt(sessionId, promptForPi, promptImages)
             return Result.success(Unit)
         }
 
@@ -547,7 +567,7 @@ class AgentCoordinator(
         if (!isAppInForeground && !isOverlayVisible()) {
             ensureForegroundServiceRunning("正在后台处理请求")
         }
-        runtime.prompt(sessionId, promptForPi)
+        runtime.prompt(sessionId, promptForPi, promptImages)
         return Result.success(Unit)
     }
 

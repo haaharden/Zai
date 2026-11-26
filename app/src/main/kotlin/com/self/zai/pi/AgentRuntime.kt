@@ -2,6 +2,7 @@ package com.self.zai.pi
 
 import com.self.zai.model.AuthUiState
 import com.self.zai.model.CustomProviderConfig
+import com.self.zai.model.PromptImage
 import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.model.SessionContextUsage
@@ -129,6 +130,9 @@ interface AgentRuntime {
         compactionThresholdPercent: Int = 75,
     )
     fun prompt(sessionId: String, text: String)
+    fun prompt(sessionId: String, text: String, images: List<PromptImage>) {
+        prompt(sessionId, text)
+    }
     fun compactSession(sessionId: String)
     fun abort(sessionId: String)
     fun disposeSession(sessionId: String)
