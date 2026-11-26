@@ -42,15 +42,21 @@ object SystemPromptBuilder {
             append("\n\n## 已接入 MCP 外部工具\n")
             append("以下远程 MCP 工具已注册并可直接调用：$serverList。外部 MCP 工具无需切离当前应用，可与手机操控工具组合完成复杂任务。")
         }
+
+        if (settings.webSearchEnabled) {
+            append("\n\n## 联网搜索\n")
+            append("已内置 `web_search(query, max_results?)` 联网搜索与 `fetch_url(url, max_chars?)` 网页正文提取工具。查询最新资讯、文档、天气、价格或核实事实时请直接调用，无需打开手机浏览器；引用结论时请附带关键来源。")
+        }
     }
 
     /**
-     * Deterministic fingerprint covering prompt + enabled skills + enabled MCP tools + compaction config
+     * Deterministic fingerprint covering prompt + enabled skills + enabled MCP tools + web search + compaction config
      * so Pi session configuration auto-refreshes whenever any capability changes.
      */
     fun configFingerprint(settings: AppSettings, supportsImages: Boolean): String {
         val sb = StringBuilder()
         sb.append(supportsImages).append('|')
+        sb.append(settings.webSearchEnabled).append('|')
         sb.append(settings.compactionMode.name).append(':').append(settings.compactionThresholdPercent).append('|')
         sb.append(settings.userSystemPrompt.trim().hashCode()).append('|')
         for (sk in settings.skills.filter { it.enabled }) {

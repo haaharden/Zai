@@ -32,6 +32,8 @@ import com.self.zai.pi.PiEngine
 import com.self.zai.service.FloatingCapsuleController
 import com.self.zai.service.ZaiAgentService
 import com.self.zai.shell.ShizukuBridge
+import com.self.zai.web.HttpWebSearchClient
+import com.self.zai.web.WebSearchClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -61,6 +63,7 @@ class AppContainer(context: Context) {
     val toolRegistry: PhoneToolRegistry = PhoneToolRegistry.default(assistantBackend)
     val safetyGuard: SafetyGuard = SafetyGuard()
     val mcpClient: McpToolClient = StreamableHttpMcpClient()
+    val webSearchClient: WebSearchClient = HttpWebSearchClient()
     val returnNavigator: AppReturnNavigator = AndroidAppReturnNavigator(appContext, shizukuBridge)
 
     @Volatile
@@ -136,6 +139,7 @@ class AppContainer(context: Context) {
         credentialVault = credentialVault,
         phoneController = phoneController,
         mcpClient = mcpClient,
+        webSearchClient = webSearchClient,
         onNonPhoneToolActivity = { label -> coordinatorRef?.onNonPhoneToolActivity(label) },
     )
 

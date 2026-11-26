@@ -51,6 +51,50 @@ enum class CompactionMode {
 }
 
 @Serializable
+enum class WebSearchProvider {
+    BRAVE,
+    TAVILY,
+    SERPER,
+    FREE,
+    ;
+
+    val requiresApiKey: Boolean
+        get() = this != FREE
+
+    fun label(): String = when (this) {
+        BRAVE -> "Brave"
+        TAVILY -> "Tavily"
+        SERPER -> "Serper"
+        FREE -> "免 Key"
+    }
+
+    fun detailLabel(): String = when (this) {
+        BRAVE -> "Brave Search"
+        TAVILY -> "Tavily"
+        SERPER -> "Serper (Google)"
+        FREE -> "免 Key (Bing / DDG)"
+    }
+
+    fun keyPlaceholder(): String = when (this) {
+        BRAVE -> "BSA..."
+        TAVILY -> "tvly-..."
+        SERPER -> "Serper API Key"
+        FREE -> ""
+    }
+
+    companion object {
+        val DEFAULT_PRIORITY: List<WebSearchProvider> = listOf(BRAVE, TAVILY, SERPER, FREE)
+
+        fun normalizePriority(raw: List<WebSearchProvider>): List<WebSearchProvider> {
+            val seen = LinkedHashSet<WebSearchProvider>()
+            for (p in raw) seen.add(p)
+            for (p in DEFAULT_PRIORITY) seen.add(p)
+            return seen.toList()
+        }
+    }
+}
+
+@Serializable
 data class CustomModelEntry(
     val id: String,
     val contextWindow: Int = 128_000,
@@ -119,6 +163,8 @@ data class AppSettings(
     val compactionMode: CompactionMode = CompactionMode.ACP,
     val compactionThresholdPercent: Int = 75,
     val enabledSubscriptionModels: Map<String, List<String>> = emptyMap(),
+    val webSearchEnabled: Boolean = true,
+    val webSearchPriority: List<WebSearchProvider> = WebSearchProvider.DEFAULT_PRIORITY,
 )
 
 data class ModelOption(

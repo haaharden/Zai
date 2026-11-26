@@ -448,6 +448,7 @@ private fun ZaiRoot(
 
     var route by remember { mutableStateOf(OverlayRoute.NONE) }
     var latestRelease by remember { mutableStateOf<ReleaseUpdateInfo?>(null) }
+    var configuredWebSearchProviders by remember { mutableStateOf(coordinator.configuredWebSearchProviders()) }
 
     LaunchedEffect(Unit) {
         coordinator.compactionNotices.collect { notice ->
@@ -623,6 +624,15 @@ private fun ZaiRoot(
                         onOpenSkills = { route = OverlayRoute.SKILLS },
                         onOpenMcpServers = { route = OverlayRoute.MCP },
                         onOpenModels = { route = OverlayRoute.MODELS },
+                        configuredWebSearchProviders = configuredWebSearchProviders,
+                        onUpdateWebSearchEnabled = { enabled -> coordinator.updateWebSearchEnabled(enabled) },
+                        onUpdateWebSearchPriority = { list -> coordinator.updateWebSearchPriority(list) },
+                        onGetWebSearchApiKey = { provider -> coordinator.getWebSearchApiKey(provider) },
+                        onSaveWebSearchApiKey = { provider, apiKey ->
+                            coordinator.saveWebSearchApiKey(provider, apiKey)
+                            configuredWebSearchProviders = coordinator.configuredWebSearchProviders()
+                        },
+                        onTestWebSearch = { coordinator.testWebSearch() },
                         onRequestShizuku = {
                             if (!container.shizukuBridge.requestPermission()) {
                                 onShowToast("请先打开 Shizuku 并启动服务")

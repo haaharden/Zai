@@ -19,6 +19,7 @@ import com.self.zai.model.PendingAttachment
 import com.self.zai.model.SessionContextUsage
 import com.self.zai.model.SkillEntry
 import com.self.zai.model.StepState
+import com.self.zai.model.WebSearchProvider
 import com.self.zai.phone.PhoneController
 import com.self.zai.pi.AgentRuntime
 import com.self.zai.pi.PiSessionEvent
@@ -415,6 +416,49 @@ class AgentCoordinator(
     suspend fun discoverMcpTools(url: String, authToken: String?): Result<List<McpToolSummary>> =
         mcpClient.discoverTools(url, authToken)
 
+    // --- Web Search settings & encrypted keys ---
+
+    fun updateWebSearchEnabled(enabled: Boolean) {
+        repository.updateSettings { it.copy(webSearchEnabled = enabled) }
+        configuredSessions.clear()
+    }
+
+    fun updateWebSearchPriority(priority: List<WebSearchProvider>) {
+        val normalized = WebSearchProvider.normalizePriority(priority)
+        repository.updateSettings { it.copy(webSearchPriority = normalized) }
+    }
+
+    fun saveWebSearchApiKey(provider: WebSearchProvider, apiKey: String) {
+        if (!provider.requiresApiKey) return
+        val keyName = AgentToolDispatcher.webSearchApiKeyKey(provider)
+        val trimmed = apiKey.trim()
+        if (trimmed.isEmpty()) {
+            credentialVault.remove(keyName)
+        } else {
+            credentialVault.putString(keyName, trimmed)
+        }
+    }
+
+    fun getWebSearchApiKey(provider: WebSearchProvider): String? {
+        if (!provider.requiresApiKey) return null
+        return credentialVault.getString(AgentToolDispatcher.webSearchApiKeyKey(provider))
+    }
+
+    fun configuredWebSearchProviders(): Set<WebSearchProvider> =
+        WebSearchProvider.entries
+            .filter { it.requiresApiKey && !getWebSearchApiKey(it).isNullOrBlank() }
+            .toSet()
+
+    suspend fun testWebSearch(query: String = "OpenAI"): Result<String> =
+        toolDispatcher.testWebSearch(query).map { resp ->
+            val fallbackHint = if (resp.fallbackNotes.isNotEmpty()) {
+                "（已回退：${resp.fallbackNotes.joinToString("；")}）"
+            } else {
+                ""
+            }
+            "已通：${resp.providerDetail} · ${resp.results.size} 条$fallbackHint"
+        }
+
     fun onNonPhoneToolActivity(label: String) {
         _liveStepLabel.value = label
     }
@@ -729,6 +773,11 @@ class AgentCoordinator(
                         } else {
                             _liveStepLabel.value = when {
                                 event.tool == AgentToolDispatcher.READ_SKILL_TOOL -> "正在读取技能…"
+                                event.tool == AgentToolDispatcher.WEB_SEARCH_TOOL -> {
+                                    val q = event.args.optString("query").trim()
+                                    if (q.isNotEmpty()) "正在搜索「${q.take(16)}」…" else "正在联网搜索…"
+                                }
+                                event.tool == AgentToolDispatcher.FETCH_URL_TOOL -> "正在读取网页…"
                                 event.tool == "compress" || event.tool == "context_compress" -> "正在压缩上下文…"
                                 event.tool == "decompress" || event.tool == "context_expand" -> "正在解压历史块…"
                                 event.tool == "search_context" || event.tool == "context_search" -> "正在检索压缩历史…"

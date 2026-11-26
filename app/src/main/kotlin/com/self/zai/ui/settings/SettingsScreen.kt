@@ -30,6 +30,10 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,7 +60,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -73,6 +80,7 @@ import com.self.zai.model.ProviderStatus
 import com.self.zai.model.ThemeMode
 import com.self.zai.model.ThinkingLevelDisplay
 import com.self.zai.model.TtsReadoutMode
+import com.self.zai.model.WebSearchProvider
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.shell.ShizukuStatus
 import com.self.zai.ui.capabilities.UserPromptEditorSheet
@@ -115,6 +123,12 @@ fun SettingsScreen(
     onOpenSkills: () -> Unit,
     onOpenMcpServers: () -> Unit,
     onOpenModels: () -> Unit,
+    configuredWebSearchProviders: Set<WebSearchProvider> = emptySet(),
+    onUpdateWebSearchEnabled: (Boolean) -> Unit = {},
+    onUpdateWebSearchPriority: (List<WebSearchProvider>) -> Unit = {},
+    onGetWebSearchApiKey: (WebSearchProvider) -> String? = { null },
+    onSaveWebSearchApiKey: (WebSearchProvider, String) -> Unit = { _, _ -> },
+    onTestWebSearch: suspend () -> Result<String> = { Result.failure(UnsupportedOperationException()) },
     onRequestShizuku: () -> Unit,
     onTestShizuku: suspend () -> Result<String>,
     onRepairAccessibility: suspend () -> Result<Unit>,
@@ -142,6 +156,9 @@ fun SettingsScreen(
     var showUserPromptSheet by remember { mutableStateOf(false) }
     var showSelfCheckSheet by remember { mutableStateOf(false) }
     var showCompactionConfig by remember { mutableStateOf(false) }
+    var showWebSearchConfig by remember { mutableStateOf(false) }
+    var editingWebKeyProvider by remember { mutableStateOf<WebSearchProvider?>(null) }
+    var testingWebSearch by remember { mutableStateOf(false) }
     var showAdvancedControl by remember { mutableStateOf(false) }
     var showSystemPerms by remember { mutableStateOf(false) }
     var showRepoEditor by remember { mutableStateOf(false) }
@@ -360,6 +377,202 @@ fun SettingsScreen(
                     value = if (settings.mcpServers.isEmpty()) "0" else "$enabledTools 个工具",
                     onClick = onOpenMcpServers,
                 )
+
+                ZaiInsetDivider()
+
+                val orderedSearchProviders = remember(settings.webSearchPriority) {
+                    WebSearchProvider.normalizePriority(settings.webSearchPriority)
+                }
+                val topEffectiveProvider = orderedSearchProviders.firstOrNull {
+                    !it.requiresApiKey || it in configuredWebSearchProviders
+                } ?: WebSearchProvider.FREE
+                val webSearchSummary = when {
+                    !settings.webSearchEnabled -> "已关闭"
+                    topEffectiveProvider == WebSearchProvider.FREE && configuredWebSearchProviders.isEmpty() -> "免 Key"
+                    else -> "${topEffectiveProvider.label()} 优先"
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showWebSearchConfig = !showWebSearchConfig }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "联网搜索",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = webSearchSummary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        if (showWebSearchConfig) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+
+                AnimatedVisibility(visible = showWebSearchConfig) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                    ) {
+                        ZaiInsetDivider()
+                        CompactToggleRow(
+                            title = "启用联网搜索与读网页",
+                            checked = settings.webSearchEnabled,
+                            onCheckedChange = onUpdateWebSearchEnabled,
+                        )
+
+                        if (settings.webSearchEnabled) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "引擎优先级（未配或失败自动回退）",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(
+                                    enabled = !testingWebSearch,
+                                    onClick = {
+                                        testingWebSearch = true
+                                        scope.launch {
+                                            val res = onTestWebSearch()
+                                            testingWebSearch = false
+                                            val msg = res.fold(
+                                                onSuccess = { it },
+                                                onFailure = { it.message ?: "搜索测试失败" },
+                                            )
+                                            Toast.makeText(
+                                                context,
+                                                msg,
+                                                if (res.isFailure) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    },
+                                ) {
+                                    Text(
+                                        text = if (testingWebSearch) "测试中…" else "测试",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                }
+                            }
+
+                            orderedSearchProviders.forEachIndexed { idx, provider ->
+                                val hasKey = !provider.requiresApiKey || provider in configuredWebSearchProviders
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .then(
+                                            if (provider.requiresApiKey) {
+                                                Modifier.clickable { editingWebKeyProvider = provider }
+                                            } else {
+                                                Modifier
+                                            },
+                                        )
+                                        .padding(start = 16.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "${idx + 1}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.width(18.dp),
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (hasKey) MaterialTheme.colorScheme.secondary
+                                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
+                                            ),
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = provider.label(),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = when {
+                                            !provider.requiresApiKey -> "Bing / DDG"
+                                            hasKey -> "已配 Key"
+                                            else -> "未配"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (provider.requiresApiKey) {
+                                        Text(
+                                            text = if (hasKey) "改 Key" else "配 Key",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable { editingWebKeyProvider = provider }
+                                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            if (idx > 0) {
+                                                val swapped = orderedSearchProviders.toMutableList()
+                                                swapped[idx] = swapped[idx - 1].also { swapped[idx - 1] = swapped[idx] }
+                                                onUpdateWebSearchPriority(swapped)
+                                            }
+                                        },
+                                        enabled = idx > 0,
+                                        modifier = Modifier.size(30.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.KeyboardArrowUp,
+                                            contentDescription = "上移",
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            if (idx < orderedSearchProviders.lastIndex) {
+                                                val swapped = orderedSearchProviders.toMutableList()
+                                                swapped[idx] = swapped[idx + 1].also { swapped[idx + 1] = swapped[idx] }
+                                                onUpdateWebSearchPriority(swapped)
+                                            }
+                                        },
+                                        enabled = idx < orderedSearchProviders.lastIndex,
+                                        modifier = Modifier.size(30.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.KeyboardArrowDown,
+                                            contentDescription = "下移",
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // 3. System Personal Assistant & Voice
@@ -935,6 +1148,85 @@ fun SettingsScreen(
             onSave = onUpdateUserPrompt,
             onDismiss = { showUserPromptSheet = false },
         )
+    }
+
+    val keyProvider = editingWebKeyProvider
+    if (keyProvider != null) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val initialKey = remember(keyProvider) { onGetWebSearchApiKey(keyProvider).orEmpty() }
+        var keyInput by remember(keyProvider) { mutableStateOf(initialKey) }
+        var revealKey by remember(keyProvider) { mutableStateOf(false) }
+
+        ModalBottomSheet(
+            onDismissRequest = { editingWebKeyProvider = null },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .navigationBarsPadding(),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    text = "${keyProvider.detailLabel()} API Key",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "仅加密保存在本地密钥库中；留空保存即清除该 Key 并自动跳过此引擎。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ZaiTextField(
+                    value = keyInput,
+                    onValueChange = { keyInput = it },
+                    placeholder = keyProvider.keyPlaceholder(),
+                    monospace = true,
+                    visualTransformation = if (revealKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailing = {
+                        IconButton(onClick = { revealKey = !revealKey }) {
+                            Icon(
+                                if (revealKey) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                contentDescription = if (revealKey) "隐藏" else "显示",
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    },
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (initialKey.isNotBlank()) {
+                        ZaiSecondaryButton(
+                            text = "清除",
+                            onClick = {
+                                onSaveWebSearchApiKey(keyProvider, "")
+                                Toast.makeText(context, "已清除 ${keyProvider.label()} Key", Toast.LENGTH_SHORT).show()
+                                editingWebKeyProvider = null
+                            },
+                        )
+                    }
+                    ZaiPrimaryButton(
+                        text = "保存",
+                        onClick = {
+                            onSaveWebSearchApiKey(keyProvider, keyInput.trim())
+                            val toast = if (keyInput.trim().isEmpty()) {
+                                "已清除 ${keyProvider.label()} Key"
+                            } else {
+                                "已保存 ${keyProvider.label()} Key"
+                            }
+                            Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
+                            editingWebKeyProvider = null
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+            }
+        }
     }
 
     if (showSelfCheckSheet) {
