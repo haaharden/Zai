@@ -3,12 +3,15 @@ package com.self.zai.assistant
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import android.service.voice.VoiceInteractionService
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
+import android.view.View
+import com.self.zai.R
 import com.self.zai.ZaiApplication
 import com.self.zai.phone.ZaiAccessibilityService
 
@@ -31,8 +34,21 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
 
     override fun onCreate() {
         super.onCreate()
-        // Prevent the empty system VoiceInteractionSession window from being created or stealing focus.
+        // Fallback transparent theme in case any ROM creates the session Dialog despite setUiEnabled(false).
+        setTheme(R.style.Theme_Zai_AssistOverlay)
         setUiEnabled(false)
+    }
+
+    override fun onPrepareShow(args: Bundle?, showFlags: Int) {
+        super.onPrepareShow(args, showFlags)
+        // Android's VoiceInteractionSession.doShow() resets mUiEnabled=true before calling onPrepareShow()
+        // and calls mWindow.show() immediately after if mUiEnabled is still true.
+        // Calling setUiEnabled(false) HERE prevents the default white system dialog from ever showing!
+        setUiEnabled(false)
+    }
+
+    override fun onCreateContentView(): View = View(context).apply {
+        setBackgroundColor(Color.TRANSPARENT)
     }
 
     override fun onShow(args: Bundle?, showFlags: Int) {
