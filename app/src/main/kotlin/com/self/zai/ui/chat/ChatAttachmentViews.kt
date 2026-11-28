@@ -52,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -67,40 +68,45 @@ import com.self.zai.model.PendingAttachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun AttachmentPickerSheet(
+internal fun AttachmentPopoverCard(
     onPickImages: () -> Unit,
     onTakePhoto: () -> Unit,
     onPickFiles: () -> Unit,
     onPasteClipboardImage: () -> Unit,
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
     val hasClipImg = remember { AttachmentManager.hasClipboardImage(context) }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            width = 0.6.dp,
+            color = if (isDark) Color.White.copy(alpha = 0.12f) else MaterialTheme.colorScheme.outlineVariant,
+        ),
+        shadowElevation = if (isDark) 12.dp else 14.dp,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = "添加附件",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    text = "支持图片、PDF、Word / Excel / PPT、代码与文本 · 单条最多 ${AttachmentManager.MAX_ATTACHMENTS_PER_MESSAGE} 个",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = "支持图片、PDF、Office 文档与代码 · 单条最多 ${AttachmentManager.MAX_ATTACHMENTS_PER_MESSAGE} 个",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -157,8 +163,6 @@ internal fun AttachmentPickerSheet(
                     modifier = Modifier.weight(1f),
                 )
             }
-
-            Spacer(Modifier.height(10.dp))
         }
     }
 }

@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,15 +19,14 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -77,11 +78,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.self.zai.model.MessageRole
 import com.self.zai.permission.DevicePermissionHelper
-import com.self.zai.ui.components.ZaiModelPickerSheet
+import com.self.zai.ui.components.ZaiModelPopoverCard
 import com.self.zai.ui.components.ZaiMotion
 import com.self.zai.ui.components.ZaiThinkingPopoverCard
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private enum class ComposerPopover { NONE, MODEL, THINKING, CONTEXT, ATTACHMENT }
 
 @Composable
 fun ChatScreen(
@@ -92,32 +94,21 @@ fun ChatScreen(
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    val imeBottomPx = WindowInsets.ime.getBottom(density)
     val lifecycleOwner = LocalLifecycleOwner.current
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
     var showSessionsSheet by remember { mutableStateOf(false) }
-    var showModelPicker by remember { mutableStateOf(false) }
-    var showThinkingPicker by remember { mutableStateOf(false) }
-    var showContextSheet by remember { mutableStateOf(false) }
-    var showAttachmentSheet by remember { mutableStateOf(false) }
+    var activePopover by remember { mutableStateOf(ComposerPopover.NONE) }
+    var lastPopover by remember { mutableStateOf(ComposerPopover.THINKING) }
+    if (activePopover != ComposerPopover.NONE) {
+        lastPopover = activePopover
+    }
     var composerAreaHeightPx by remember { mutableIntStateOf(0) }
     var lightboxData by remember { mutableStateOf<ImageLightboxData?>(null) }
 
-    // Prevent IME collapse vs ModalBottomSheet entrance double-bounce when opening heavy full sheets
-    fun openModalSheetAfterIme(open: () -> Unit) {
-        showThinkingPicker = false
-        if (imeBottomPx > 0) {
-            focusManager.clearFocus(force = true)
-            keyboardController?.hide()
-            scope.launch {
-                delay(160L)
-                open()
-            }
-        } else {
-            open()
-        }
+    fun togglePopover(target: ComposerPopover) {
+        activePopover = if (activePopover == target) ComposerPopover.NONE else target
     }
     var hasWriteSecure by remember { mutableStateOf(DevicePermissionHelper.hasWriteSecureSettings(context)) }
     var a11ySettingOn by remember { mutableStateOf(DevicePermissionHelper.isAccessibilityEnabledInSettings(context)) }
@@ -223,20 +214,33 @@ fun ChatScreen(
 
     val isDarkBg = MaterialTheme.colorScheme.background.luminance() < 0.4f
     val thinkingModel = state.sessionModel?.takeIf { it.supportsThinkingSelection }
-    val thinkingPopoverVisible = showThinkingPicker && thinkingModel != null
+    val contextUsage = state.contextUsage
+    val popoverVisible = when (activePopover) {
+        ComposerPopover.NONE -> false
+        ComposerPopover.THINKING -> thinkingModel != null
+        ComposerPopover.CONTEXT -> contextUsage != null
+        ComposerPopover.MODEL, ComposerPopover.ATTACHMENT -> true
+    }
 
-    if (thinkingPopoverVisible) {
-        BackHandler { showThinkingPicker = false }
+    if (popoverVisible) {
+        BackHandler { activePopover = ComposerPopover.NONE }
+    } else if (showSessionsSheet) {
+        BackHandler { showSessionsSheet = false }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(MaterialTheme.colorScheme.background),
+    ) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding(),
     ) {
+        val availableHeightDp = maxHeight
     Column(
         modifier = Modifier.fillMaxSize(),
     ) {
@@ -249,14 +253,22 @@ fun ChatScreen(
         ) {
             ZSettingsButton(
                 hasNewUpdate = state.hasNewUpdate,
-                onClick = actions.onOpenSettings,
+                onClick = {
+                    activePopover = ComposerPopover.NONE
+                    actions.onOpenSettings()
+                },
             )
 
             Spacer(Modifier.weight(1f))
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 HeaderSquareTrigger(
-                    onClick = { openModalSheetAfterIme { showSessionsSheet = true } },
+                    onClick = {
+                        activePopover = ComposerPopover.NONE
+                        focusManager.clearFocus(force = true)
+                        keyboardController?.hide()
+                        showSessionsSheet = true
+                    },
                     contentDescription = "会话记录",
                 ) {
                     Icon(
@@ -540,10 +552,13 @@ fun ChatScreen(
             ComposerControlStrip(
                 state = state,
                 hasControlChannel = hasControlChannel,
-                onOpenModelPicker = { openModalSheetAfterIme { showModelPicker = true } },
-                onOpenModels = actions.onOpenModels,
-                onOpenThinkingPicker = { showThinkingPicker = !showThinkingPicker },
-                onOpenContextSheet = { openModalSheetAfterIme { showContextSheet = true } },
+                onOpenModelPicker = { togglePopover(ComposerPopover.MODEL) },
+                onOpenModels = {
+                    activePopover = ComposerPopover.NONE
+                    actions.onOpenModels()
+                },
+                onOpenThinkingPicker = { togglePopover(ComposerPopover.THINKING) },
+                onOpenContextSheet = { togglePopover(ComposerPopover.CONTEXT) },
             )
 
             ComposerDock(
@@ -551,10 +566,10 @@ fun ChatScreen(
                 actions = actions,
                 isCurrentSessionRunning = isCurrentSessionRunning,
                 backgroundRunningSession = backgroundRunningSession,
-                onOpenAttachmentSheet = { openModalSheetAfterIme { showAttachmentSheet = true } },
+                onOpenAttachmentSheet = { togglePopover(ComposerPopover.ATTACHMENT) },
                 onOpenLightbox = { lightboxData = it },
                 onSentSuccess = {
-                    showThinkingPicker = false
+                    activePopover = ComposerPopover.NONE
                     autoFollowBottom = true
                     scope.launch { listState.animateScrollToItem(bottomAnchorIndex) }
                 },
@@ -562,9 +577,9 @@ fun ChatScreen(
         }
     }
 
-    // In-window tap-catcher scrim for Apple thinking popover (keeps IME keyboard rock-steady!)
+    // In-window tap-catcher scrim for all composer popovers (keeps IME keyboard 100% rock-steady!)
     androidx.compose.animation.AnimatedVisibility(
-        visible = thinkingPopoverVisible,
+        visible = popoverVisible,
         enter = fadeIn(tween(150)),
         exit = fadeOut(tween(120)),
         modifier = Modifier.fillMaxSize(),
@@ -572,87 +587,122 @@ fun ChatScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = if (isDarkBg) 0.24f else 0.08f))
+                .background(Color.Black.copy(alpha = if (isDarkBg) 0.28f else 0.10f))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = { showThinkingPicker = false },
+                    onClick = { activePopover = ComposerPopover.NONE },
                 ),
         )
     }
 
-    // In-window Apple floating popover anchored directly above the composer control strip
-    val popoverBottomPadding = with(density) { composerAreaHeightPx.toDp() } + 8.dp
+    // In-window Apple floating popover anchored directly above the composer strip
+    val composerAreaDp = with(density) { composerAreaHeightPx.toDp() }
+    val popoverBottomPadding = composerAreaDp + 8.dp
+    val maxPopoverHeight = (availableHeightDp - composerAreaDp - 72.dp).coerceIn(190.dp, 440.dp)
+    val displayPopover = if (activePopover != ComposerPopover.NONE) activePopover else lastPopover
+    val originX = when (displayPopover) {
+        ComposerPopover.MODEL, ComposerPopover.ATTACHMENT -> 0.22f
+        ComposerPopover.THINKING -> 0.45f
+        ComposerPopover.CONTEXT -> 0.78f
+        ComposerPopover.NONE -> 0.5f
+    }
+
     androidx.compose.animation.AnimatedVisibility(
-        visible = thinkingPopoverVisible,
+        visible = popoverVisible,
         enter = fadeIn(tween(150)) + scaleIn(
-            initialScale = 0.90f,
-            transformOrigin = TransformOrigin(0.35f, 1f),
+            initialScale = 0.92f,
+            transformOrigin = TransformOrigin(originX, 1f),
             animationSpec = ZaiMotion.SpringSnappy,
         ),
         exit = fadeOut(tween(115)) + scaleOut(
-            targetScale = 0.92f,
-            transformOrigin = TransformOrigin(0.35f, 1f),
+            targetScale = 0.93f,
+            transformOrigin = TransformOrigin(originX, 1f),
             animationSpec = tween(115),
         ),
         modifier = Modifier
             .align(Alignment.BottomStart)
-            .padding(start = 18.dp, end = 18.dp, bottom = popoverBottomPadding),
+            .padding(start = 16.dp, end = 16.dp, bottom = popoverBottomPadding),
     ) {
-        val modelForPopover = thinkingModel
-        if (modelForPopover != null) {
-            ZaiThinkingPopoverCard(
-                model = modelForPopover,
-                selectedLevel = state.sessionThinkingLevel,
-                onSelect = actions.onSelectSessionThinking,
-                onDismiss = { showThinkingPicker = false },
+        when (displayPopover) {
+            ComposerPopover.MODEL -> ZaiModelPopoverCard(
+                title = "选择当前对话模型",
+                providers = state.providers,
+                selectedModel = state.sessionModel,
+                providerQuotas = state.providerQuotas,
+                onRefreshQuota = actions.onRefreshQuota,
+                onSelect = actions.onSelectSessionModel,
+                onManageProviders = actions.onOpenModels,
+                onDismiss = { activePopover = ComposerPopover.NONE },
+                maxHeight = maxPopoverHeight,
             )
+
+            ComposerPopover.THINKING -> {
+                val modelForPopover = thinkingModel
+                if (modelForPopover != null) {
+                    ZaiThinkingPopoverCard(
+                        model = modelForPopover,
+                        selectedLevel = state.sessionThinkingLevel,
+                        onSelect = actions.onSelectSessionThinking,
+                        onDismiss = { activePopover = ComposerPopover.NONE },
+                    )
+                }
+            }
+
+            ComposerPopover.CONTEXT -> {
+                val usageForPopover = contextUsage
+                if (usageForPopover != null) {
+                    ContextUsagePopoverCard(
+                        contextUsage = usageForPopover,
+                        isRunning = state.isRunning,
+                        messageCount = session.messages.size,
+                        piReady = state.piReady,
+                        onOpenSettings = actions.onOpenSettings,
+                        onCompactSession = actions.onCompactSession,
+                        onDismiss = { activePopover = ComposerPopover.NONE },
+                    )
+                }
+            }
+
+            ComposerPopover.ATTACHMENT -> AttachmentPopoverCard(
+                onPickImages = actions.onPickImages,
+                onTakePhoto = actions.onTakePhoto,
+                onPickFiles = actions.onPickFiles,
+                onPasteClipboardImage = actions.onPasteClipboardImage,
+                onDismiss = { activePopover = ComposerPopover.NONE },
+            )
+
+            ComposerPopover.NONE -> Unit
         }
     }
     }
 
-    if (showAttachmentSheet) {
-        AttachmentPickerSheet(
-            onPickImages = actions.onPickImages,
-            onTakePhoto = actions.onTakePhoto,
-            onPickFiles = actions.onPickFiles,
-            onPasteClipboardImage = actions.onPasteClipboardImage,
-            onDismiss = { showAttachmentSheet = false },
+    // In-window Sessions Sheet anchored to physical screen bottom (OUTSIDE imePadding -> zero IME jump!)
+    androidx.compose.animation.AnimatedVisibility(
+        visible = showSessionsSheet,
+        enter = fadeIn(tween(180)),
+        exit = fadeOut(tween(150)),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = if (isDarkBg) 0.45f else 0.25f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { showSessionsSheet = false },
+                ),
         )
     }
 
-    lightboxData?.let { data ->
-        ImageLightboxDialog(data = data, onDismiss = { lightboxData = null })
-    }
-
-    if (showModelPicker) {
-        ZaiModelPickerSheet(
-            title = "选择当前对话模型",
-            providers = state.providers,
-            selectedModel = state.sessionModel,
-            providerQuotas = state.providerQuotas,
-            onRefreshQuota = actions.onRefreshQuota,
-            onSelect = actions.onSelectSessionModel,
-            onManageProviders = actions.onOpenModels,
-            onDismiss = { showModelPicker = false },
-        )
-    }
-
-    val contextUsage = state.contextUsage
-    if (showContextSheet && contextUsage != null) {
-        ContextUsageSheet(
-            contextUsage = contextUsage,
-            isRunning = state.isRunning,
-            messageCount = session.messages.size,
-            piReady = state.piReady,
-            onOpenSettings = actions.onOpenSettings,
-            onCompactSession = actions.onCompactSession,
-            onDismiss = { showContextSheet = false },
-        )
-    }
-
-    if (showSessionsSheet) {
-        ChatSessionsSheet(
+    androidx.compose.animation.AnimatedVisibility(
+        visible = showSessionsSheet,
+        enter = slideInVertically(animationSpec = ZaiMotion.SpringOffsetPage) { it } + fadeIn(tween(160)),
+        exit = slideOutVertically(animationSpec = ZaiMotion.SpringOffsetPage) { it } + fadeOut(tween(140)),
+        modifier = Modifier.align(Alignment.BottomCenter),
+    ) {
+        ChatSessionsOverlayCard(
             currentSessionId = session.id,
             allSessions = state.allSessions,
             storageBytes = state.storageBytes,
@@ -663,6 +713,11 @@ fun ChatScreen(
             onDeleteSession = actions.onDeleteSession,
             onDismiss = { showSessionsSheet = false },
         )
+    }
+    }
+
+    lightboxData?.let { data ->
+        ImageLightboxDialog(data = data, onDismiss = { lightboxData = null })
     }
 
     state.pendingConfirmation?.let { confirmation ->

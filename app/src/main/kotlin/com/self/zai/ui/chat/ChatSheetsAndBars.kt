@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
@@ -223,9 +224,8 @@ internal fun ChatMicButton(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ContextUsageSheet(
+internal fun ContextUsagePopoverCard(
     contextUsage: SessionContextUsage,
     isRunning: Boolean,
     messageCount: Int,
@@ -233,19 +233,24 @@ internal fun ContextUsageSheet(
     onOpenSettings: () -> Unit,
     onCompactSession: () -> Unit,
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            width = 0.6.dp,
+            color = if (isDark) Color.White.copy(alpha = 0.12f) else MaterialTheme.colorScheme.outlineVariant,
+        ),
+        shadowElevation = if (isDark) 12.dp else 14.dp,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -253,26 +258,32 @@ internal fun ContextUsageSheet(
             ) {
                 Text(
                     text = "上下文状态",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(
-                    onClick = {
-                        onDismiss()
-                        onOpenSettings()
-                    },
-                ) {
-                    Text("调整阈值", fontWeight = FontWeight.Medium)
-                }
+                Text(
+                    text = "调整阈值",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .applePress(scaleDown = 0.94f) {
+                            onDismiss()
+                            onOpenSettings()
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
             }
 
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(14.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .padding(14.dp),
+                    .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 val estK = String.format("%.1fK", contextUsage.estimatedTokens / 1000.0)
@@ -338,14 +349,12 @@ internal fun ContextUsageSheet(
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(14.dp))
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ChatSessionsSheet(
+internal fun ChatSessionsOverlayCard(
     currentSessionId: String,
     allSessions: List<ChatSession>,
     storageBytes: Long,
@@ -355,17 +364,24 @@ internal fun ChatSessionsSheet(
     onNewSession: () -> Unit,
     onDeleteSession: (String) -> Unit,
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val view = LocalView.current
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
     var visibleLimit by remember { mutableIntStateOf(40) }
     val visibleSessions = remember(allSessions, visibleLimit) { allSessions.take(visibleLimit) }
     val remainingCount = (allSessions.size - visibleSessions.size).coerceAtLeast(0)
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            width = 0.6.dp,
+            color = if (isDark) Color.White.copy(alpha = 0.10f) else MaterialTheme.colorScheme.outlineVariant,
+        ),
+        shadowElevation = if (isDark) 0.dp else 16.dp,
     ) {
         Column(
             modifier = Modifier
@@ -373,6 +389,21 @@ internal fun ChatSessionsSheet(
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding(),
         ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp, bottom = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(36.dp)
+                        .height(4.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -396,6 +427,7 @@ internal fun ChatSessionsSheet(
                 }
                 TextButton(
                     onClick = {
+                        ZaiHaptics.tap(view)
                         onDismiss()
                         onNewSession()
                     },
@@ -423,6 +455,7 @@ internal fun ChatSessionsSheet(
                                 else Color.Transparent,
                             )
                             .clickable {
+                                ZaiHaptics.tick(view)
                                 onSelectSession(item.id)
                                 onDismiss()
                             }
@@ -479,7 +512,10 @@ internal fun ChatSessionsSheet(
                         }
                         if (allSessions.size > 1) {
                             IconButton(
-                                onClick = { onDeleteSession(item.id) },
+                                onClick = {
+                                    ZaiHaptics.reject(view)
+                                    onDeleteSession(item.id)
+                                },
                                 modifier = Modifier.size(32.dp),
                             ) {
                                 Icon(
@@ -510,7 +546,7 @@ internal fun ChatSessionsSheet(
                     }
                 }
             }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(18.dp))
         }
     }
 }

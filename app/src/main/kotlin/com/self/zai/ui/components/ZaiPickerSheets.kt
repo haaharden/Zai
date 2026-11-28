@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.self.zai.model.ModelOption
 import com.self.zai.model.ProviderQuota
@@ -321,9 +322,9 @@ fun ProviderQuotaStrip(
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(end = 6.dp),
                 )
-            } else if (quota?.kind != "balance" && !quota?.creditsBalance.isNullOrBlank()) {
+            } else if (quota != null && quota.kind != "balance" && !quota.creditsBalance.isNullOrBlank()) {
                 Text(
-                    text = "余额 ${quota?.creditsBalance}",
+                    text = "余额 ${quota.creditsBalance}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(end = 6.dp),
@@ -660,6 +661,237 @@ fun ZaiThinkingPopoverCard(
                 }
                 if (idx < model.thinkingLevels.lastIndex) {
                     ZaiInsetDivider()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * In-window Apple floating popover for switching models directly above the chat composer.
+ * Lives inside the host window (no Dialog/ModalBottomSheet), so opening it while the IME keyboard
+ * is active NEVER closes the keyboard or triggers double-jump window resize animations.
+ */
+@Composable
+fun ZaiModelPopoverCard(
+    title: String,
+    providers: List<ProviderStatus>,
+    selectedModel: ModelOption?,
+    providerQuotas: Map<String, ProviderQuota> = emptyMap(),
+    onRefreshQuota: ((providerId: String, force: Boolean) -> Unit)? = null,
+    onSelect: (providerId: String, modelId: String) -> Unit,
+    onManageProviders: (() -> Unit)? = null,
+    onDismiss: () -> Unit,
+    maxHeight: Dp = 400.dp,
+    modifier: Modifier = Modifier,
+) {
+    val view = LocalView.current
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
+    val connected = providers.filter { it.isConnected && it.models.isNotEmpty() }
+    val activeProvider = connected.firstOrNull { it.id == selectedModel?.providerId } ?: connected.firstOrNull()
+
+    LaunchedEffect(activeProvider?.id) {
+        val pid = activeProvider?.id
+        if (!pid.isNullOrBlank()) {
+            onRefreshQuota?.invoke(pid, false)
+        }
+    }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(max = maxHeight),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            width = 0.6.dp,
+            color = if (isDark) Color.White.copy(alpha = 0.12f) else MaterialTheme.colorScheme.outlineVariant,
+        ),
+        shadowElevation = if (isDark) 12.dp else 14.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                if (onManageProviders != null) {
+                    Text(
+                        text = "管理账号",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .applePress(scaleDown = 0.94f) {
+                                onDismiss()
+                                onManageProviders()
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            if (connected.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = "尚未连接任何模型渠道",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (onManageProviders != null) {
+                        ZaiPrimaryButton(
+                            text = "前往登录或添加供应商",
+                            onClick = {
+                                onDismiss()
+                                onManageProviders()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (activeProvider != null) {
+                        val activeQuota = providerQuotas[activeProvider.id]
+                        val expectsQuota = activeQuota != null ||
+                            activeProvider.supportsOAuth ||
+                            activeProvider.name.contains("openrouter", ignoreCase = true) ||
+                            activeProvider.name.contains("deepseek", ignoreCase = true)
+                        if (expectsQuota) {
+                            ProviderQuotaStrip(
+                                providerLabel = activeProvider.name,
+                                quota = activeQuota,
+                                onRefresh = {
+                                    ZaiHaptics.tap(view)
+                                    onRefreshQuota?.invoke(activeProvider.id, true)
+                                },
+                            )
+                        }
+                    }
+
+                    connected.forEach { provider ->
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = provider.name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                val q = providerQuotas[provider.id]
+                                val badge = q?.planDisplayLabel() ?: q?.compactInlineLabel()
+                                if (!badge.isNullOrBlank()) {
+                                    Text(
+                                        text = badge,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (q?.limitReached == true) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.primary
+                                        },
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f))
+                                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                            ) {
+                                provider.models.forEachIndexed { idx, model ->
+                                    val isSelected = selectedModel?.providerId == model.providerId &&
+                                        selectedModel.id == model.id
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(
+                                                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.50f)
+                                                else Color.Transparent,
+                                            )
+                                            .clickable {
+                                                ZaiHaptics.tick(view)
+                                                onSelect(model.providerId, model.id)
+                                                onDismiss()
+                                            }
+                                            .padding(horizontal = 13.dp, vertical = 11.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = model.id,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            val meta = buildString {
+                                                append("${model.contextWindow / 1000}K 上下文")
+                                                if (model.supportsImages) append("  视觉")
+                                                if (model.supportsThinkingSelection) {
+                                                    append("  思考 ${model.thinkingLevels.size} 档")
+                                                }
+                                            }
+                                            Text(
+                                                text = meta,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        if (isSelected) {
+                                            Spacer(Modifier.width(8.dp))
+                                            Icon(
+                                                Icons.Rounded.Check,
+                                                contentDescription = "已选中",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(17.dp),
+                                            )
+                                        }
+                                    }
+                                    if (idx < provider.models.lastIndex) {
+                                        ZaiInsetDivider()
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
