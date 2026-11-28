@@ -1,25 +1,14 @@
 package com.self.zai.agent
 
 import com.self.zai.data.AttachmentManager
-import com.self.zai.data.CredentialVault
 import com.self.zai.data.SessionRepository
-import com.self.zai.mcp.McpToolClient
-import com.self.zai.mcp.StreamableHttpMcpClient
 import com.self.zai.model.ActionStep
 import com.self.zai.model.ChatMessage
 import com.self.zai.model.ChatSession
-import com.self.zai.model.CompactionMode
-import com.self.zai.model.CustomModelEntry
-import com.self.zai.model.CustomProviderConfig
-import com.self.zai.model.McpServerConfig
-import com.self.zai.model.McpToolSummary
 import com.self.zai.model.MessageRole
-import com.self.zai.model.ModelOption
 import com.self.zai.model.PendingAttachment
 import com.self.zai.model.SessionContextUsage
-import com.self.zai.model.SkillEntry
 import com.self.zai.model.StepState
-import com.self.zai.model.WebSearchProvider
 import com.self.zai.phone.PhoneController
 import com.self.zai.pi.AgentRuntime
 import com.self.zai.pi.PiSessionEvent
@@ -56,28 +45,29 @@ interface RunChromeHost {
 }
 
 /**
- * Central session and run orchestrator coordinating [AgentRuntime], [PhoneController],
- * [ModelSelectionManager], [SessionRepository], [AppReturnNavigator], and [RunChromeHost].
+ * Focused session and run orchestrator coordinating [AgentRuntime], [PhoneController],
+ * [AgentToolDispatcher], [ModelSelectionManager], [AppReturnNavigator], and [RunChromeHost].
+ *
+ * Capability CRUD lives in [CapabilitiesManager]; model selection lives in [ModelSelectionManager];
+ * device self-healing lives in [com.self.zai.permission.DeviceHealthCoordinator].
  */
 class AgentCoordinator(
     private val repository: SessionRepository,
-    private val credentialVault: CredentialVault,
     private val runtime: AgentRuntime,
     val phoneController: PhoneController,
     val toolDispatcher: AgentToolDispatcher,
-    val mcpClient: McpToolClient,
     val modelSelection: ModelSelectionManager,
     private val returnNavigator: AppReturnNavigator,
     private val chromeHost: RunChromeHost,
+    private val runEventBus: RunEventBus = RunEventBus(),
     private val onStartRuntimeExtra: () -> Unit = {},
-    private val onRepairAccessibility: suspend () -> Result<Unit> = { Result.failure(UnsupportedOperationException()) },
     private val onDismissAssistantOverlay: () -> Unit = {},
     private val isOverlayVisible: () -> Boolean = { false },
     private val onSessionDeleted: (ChatSession) -> Unit = {},
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
-    private val configuredSessions = ConcurrentHashMap<String, String>() // sessionId -> "provider/model/thinking"
+    private val configuredSessions = ConcurrentHashMap<String, String>() // sessionId -> "provider/model/thinking/fp"
 
     @Volatile
     private var foregroundServiceActive: Boolean = false
@@ -135,6 +125,7 @@ class AgentCoordinator(
         runtime.toolHandler = toolDispatcher
         observePiEvents()
         observeProviders()
+        observeRunEventBus()
     }
 
     fun startRuntime() {
@@ -215,72 +206,6 @@ class AgentCoordinator(
         }
     }
 
-    fun defaultModelOption(): ModelOption? = modelSelection.defaultModelOption()
-    fun visibleProviders(rawProviders: List<com.self.zai.model.ProviderStatus> = runtime.providers.value): List<com.self.zai.model.ProviderStatus> =
-        modelSelection.visibleProviders(rawProviders)
-    fun defaultThinkingLevel(): String = modelSelection.defaultThinkingLevel()
-    fun sessionModelOption(session: ChatSession): ModelOption? = modelSelection.sessionModelOption(session)
-    fun sessionThinkingLevel(
-        session: ChatSession,
-        model: ModelOption? = sessionModelOption(session),
-    ): String = modelSelection.sessionThinkingLevel(session, model)
-
-    fun selectDefaultModel(providerId: String, modelId: String) {
-        modelSelection.selectDefaultModel(providerId, modelId, currentSession())
-    }
-
-    fun selectDefaultThinkingLevel(level: String) {
-        modelSelection.selectDefaultThinkingLevel(level, currentSession())
-    }
-
-    fun selectSessionModel(providerId: String, modelId: String) {
-        modelSelection.selectSessionModel(currentSession(), providerId, modelId)
-    }
-
-    fun selectSessionThinkingLevel(level: String) {
-        modelSelection.selectSessionThinkingLevel(currentSession(), level)
-    }
-
-    fun updateSubscriptionEnabledModels(providerId: String, selectedModelIds: List<String>) {
-        modelSelection.updateSubscriptionEnabledModels(providerId, selectedModelIds)
-    }
-
-    fun saveCustomProvider(
-        existingId: String?,
-        name: String,
-        baseUrl: String,
-        apiKey: String,
-        models: List<CustomModelEntry>,
-        defaultImages: Boolean,
-    ): CustomProviderConfig = modelSelection.saveCustomProvider(
-        existingId = existingId,
-        name = name,
-        baseUrl = baseUrl,
-        apiKey = apiKey,
-        models = models,
-        defaultImages = defaultImages,
-    )
-
-    fun deleteCustomProvider(providerId: String) = modelSelection.deleteCustomProvider(providerId)
-
-    // --- User System Prompt, Skills & MCP management ---
-
-    fun updateUserSystemPrompt(prompt: String) {
-        repository.updateSettings { it.copy(userSystemPrompt = prompt.trim()) }
-        configuredSessions.clear()
-    }
-
-    fun updateCompactionSettings(mode: CompactionMode, thresholdPercent: Int) {
-        val clamped = thresholdPercent.coerceIn(40, 95)
-        repository.updateSettings {
-            it.copy(
-                compactionMode = mode,
-                compactionThresholdPercent = clamped,
-            )
-        }
-        configuredSessions.clear()
-    }
-
     fun compactActiveSession(): Result<Unit> {
         if (_isRunning.value) {
             return Result.failure(IllegalStateException("当前正在生成回复，请稍候再压缩"))
@@ -292,9 +217,9 @@ class AgentCoordinator(
         if (session.messages.size < 4) {
             return Result.failure(IllegalStateException("当前对话较短，暂无需压缩"))
         }
-        val model = sessionModelOption(session)
+        val model = modelSelection.sessionModelOption(session)
             ?: return Result.failure(IllegalStateException("请先配置可用模型"))
-        val thinking = sessionThinkingLevel(session, model)
+        val thinking = modelSelection.sessionThinkingLevel(session, model)
         val currentSettings = repository.settings.value
         val capabilityFingerprint = SystemPromptBuilder.configFingerprint(currentSettings, model.supportsImages)
         val configKey = "${model.providerId}/${model.id}/$thinking/$capabilityFingerprint"
@@ -315,149 +240,6 @@ class AgentCoordinator(
         runtime.compactSession(session.id)
         return Result.success(Unit)
     }
-
-    fun saveSkill(
-        existingId: String?,
-        name: String,
-        description: String,
-        instructions: String,
-        enabled: Boolean = true,
-    ): SkillEntry {
-        val id = existingId?.takeIf { it.isNotBlank() } ?: "sk_${UUID.randomUUID().toString().take(8)}"
-        val entry = SkillEntry(
-            id = id,
-            name = SkillMarkdownParser.normalizeSkillName(name),
-            description = description.trim().ifBlank { "自定义技能" },
-            instructions = instructions.trim(),
-            enabled = enabled,
-        )
-        repository.updateSettings { cur ->
-            val list = cur.skills.toMutableList()
-            val idx = list.indexOfFirst { it.id == id }
-            if (idx >= 0) list[idx] = entry else list.add(0, entry)
-            cur.copy(skills = list)
-        }
-        configuredSessions.clear()
-        return entry
-    }
-
-    fun toggleSkill(skillId: String, enabled: Boolean) {
-        repository.updateSettings { cur ->
-            cur.copy(skills = cur.skills.map { if (it.id == skillId) it.copy(enabled = enabled) else it })
-        }
-        configuredSessions.clear()
-    }
-
-    fun deleteSkill(skillId: String) {
-        repository.updateSettings { cur ->
-            cur.copy(skills = cur.skills.filterNot { it.id == skillId })
-        }
-        configuredSessions.clear()
-    }
-
-    fun saveMcpServer(
-        existingId: String?,
-        name: String,
-        url: String,
-        authToken: String?,
-        tools: List<McpToolSummary>,
-        enabled: Boolean = true,
-    ): McpServerConfig {
-        val id = existingId?.takeIf { it.isNotBlank() } ?: "mcp_${UUID.randomUUID().toString().take(8)}"
-        val normalizedUrl = StreamableHttpMcpClient.normalizeUrl(url)
-        val cfg = McpServerConfig(
-            id = id,
-            name = name.trim().ifBlank {
-                normalizedUrl.substringAfter("://").substringBefore("/").ifBlank { "MCP 服务" }
-            },
-            url = normalizedUrl,
-            enabled = enabled,
-            tools = tools,
-        )
-        val trimmedToken = authToken?.trim()
-        if (trimmedToken != null) {
-            if (trimmedToken.isEmpty()) {
-                credentialVault.remove(AgentToolDispatcher.mcpAuthKey(id))
-            } else {
-                credentialVault.putString(AgentToolDispatcher.mcpAuthKey(id), trimmedToken)
-            }
-        }
-        mcpClient.invalidateSession(normalizedUrl)
-        repository.updateSettings { cur ->
-            val list = cur.mcpServers.toMutableList()
-            val idx = list.indexOfFirst { it.id == id }
-            if (idx >= 0) list[idx] = cfg else list.add(0, cfg)
-            cur.copy(mcpServers = list)
-        }
-        configuredSessions.clear()
-        return cfg
-    }
-
-    fun toggleMcpServer(serverId: String, enabled: Boolean) {
-        repository.updateSettings { cur ->
-            cur.copy(mcpServers = cur.mcpServers.map { if (it.id == serverId) it.copy(enabled = enabled) else it })
-        }
-        configuredSessions.clear()
-    }
-
-    fun deleteMcpServer(serverId: String) {
-        val existing = repository.settings.value.mcpServers.firstOrNull { it.id == serverId }
-        if (existing != null) mcpClient.invalidateSession(existing.url)
-        credentialVault.remove(AgentToolDispatcher.mcpAuthKey(serverId))
-        repository.updateSettings { cur ->
-            cur.copy(mcpServers = cur.mcpServers.filterNot { it.id == serverId })
-        }
-        configuredSessions.clear()
-    }
-
-    fun getMcpAuthToken(serverId: String): String? =
-        credentialVault.getString(AgentToolDispatcher.mcpAuthKey(serverId))
-
-    suspend fun discoverMcpTools(url: String, authToken: String?): Result<List<McpToolSummary>> =
-        mcpClient.discoverTools(url, authToken)
-
-    // --- Web Search settings & encrypted keys ---
-
-    fun updateWebSearchEnabled(enabled: Boolean) {
-        repository.updateSettings { it.copy(webSearchEnabled = enabled) }
-        configuredSessions.clear()
-    }
-
-    fun updateWebSearchPriority(priority: List<WebSearchProvider>) {
-        val normalized = WebSearchProvider.normalizePriority(priority)
-        repository.updateSettings { it.copy(webSearchPriority = normalized) }
-    }
-
-    fun saveWebSearchApiKey(provider: WebSearchProvider, apiKey: String) {
-        if (!provider.requiresApiKey) return
-        val keyName = AgentToolDispatcher.webSearchApiKeyKey(provider)
-        val trimmed = apiKey.trim()
-        if (trimmed.isEmpty()) {
-            credentialVault.remove(keyName)
-        } else {
-            credentialVault.putString(keyName, trimmed)
-        }
-    }
-
-    fun getWebSearchApiKey(provider: WebSearchProvider): String? {
-        if (!provider.requiresApiKey) return null
-        return credentialVault.getString(AgentToolDispatcher.webSearchApiKeyKey(provider))
-    }
-
-    fun configuredWebSearchProviders(): Set<WebSearchProvider> =
-        WebSearchProvider.entries
-            .filter { it.requiresApiKey && !getWebSearchApiKey(it).isNullOrBlank() }
-            .toSet()
-
-    suspend fun testWebSearch(query: String = "OpenAI"): Result<String> =
-        toolDispatcher.testWebSearch(query).map { resp ->
-            val fallbackHint = if (resp.fallbackNotes.isNotEmpty()) {
-                "（已回退：${resp.fallbackNotes.joinToString("；")}）"
-            } else {
-                ""
-            }
-            "已通：${resp.providerDetail} · ${resp.results.size} 条$fallbackHint"
-        }
 
     fun onNonPhoneToolActivity(label: String) {
         _liveStepLabel.value = label
@@ -495,7 +277,7 @@ class AgentCoordinator(
         }
 
         val session = currentSession()
-        val model = sessionModelOption(session)
+        val model = modelSelection.sessionModelOption(session)
             ?: return Result.failure(IllegalStateException("请先登录 ChatGPT，或添加供应商密钥与模型"))
         val promptImages = attachments.flatMap { it.promptImages }
         if (promptImages.isNotEmpty() && !model.supportsImages) {
@@ -503,7 +285,7 @@ class AgentCoordinator(
                 IllegalStateException("当前模型「${model.name}」不支持看图，请先切换支持视觉的模型或移除图片/PDF附件"),
             )
         }
-        val thinking = sessionThinkingLevel(session, model)
+        val thinking = modelSelection.sessionThinkingLevel(session, model)
         val sessionId = session.id
         val currentSettings = repository.settings.value
 
@@ -661,8 +443,6 @@ class AgentCoordinator(
         if (resetToBundled) runtime.resetToBundledPi() else runtime.hotReload()
     }
 
-    suspend fun repairAccessibilityWithShizuku(): Result<Unit> = onRepairAccessibility()
-
     private fun finishRunUiState(allowAutoReturn: Boolean = false, sessionId: String? = null) {
         val operated = phoneController.didOperatePhoneThisRun()
         val shouldReturn = allowAutoReturn &&
@@ -701,6 +481,30 @@ class AgentCoordinator(
             } else {
                 chromeHost.showCompletedBanner(bannerLabel)
                 chromeHost.postFinishedFallbackNotification(summary)
+            }
+        }
+    }
+
+    private fun observeRunEventBus() {
+        scope.launch {
+            runEventBus.activityEvents.collect { event ->
+                when (event) {
+                    is RunActivityEvent.PhoneOperationStep -> onPhoneOperationStep(event.targetAppLabel)
+                    is RunActivityEvent.NonPhoneToolActivity -> onNonPhoneToolActivity(event.label)
+                }
+            }
+        }
+        scope.launch {
+            runEventBus.controlEvents.collect { event ->
+                when (event) {
+                    RunControlEvent.StopActiveRun -> stopActiveRun()
+                    RunControlEvent.FocusRunningSession -> focusRunningSession()
+                }
+            }
+        }
+        scope.launch {
+            runEventBus.configInvalidations.collect { sessionId ->
+                invalidateSessionConfig(sessionId)
             }
         }
     }
@@ -771,21 +575,7 @@ class AgentCoordinator(
                                 msg.copy(steps = msg.steps + step)
                             }
                         } else {
-                            _liveStepLabel.value = when {
-                                event.tool == AgentToolDispatcher.READ_SKILL_TOOL -> "正在读取技能…"
-                                event.tool == AgentToolDispatcher.WEB_SEARCH_TOOL -> {
-                                    val q = event.args.optString("query").trim()
-                                    if (q.isNotEmpty()) "正在搜索「${q.take(16)}」…" else "正在联网搜索…"
-                                }
-                                event.tool == AgentToolDispatcher.FETCH_URL_TOOL -> "正在读取网页…"
-                                event.tool == "compress" || event.tool == "context_compress" -> "正在压缩上下文…"
-                                event.tool == "decompress" || event.tool == "context_expand" -> "正在解压历史块…"
-                                event.tool == "search_context" || event.tool == "context_search" -> "正在检索压缩历史…"
-                                event.tool == "acp_retrieve" -> "正在读取归档原文…"
-                                event.tool == "acp_status" -> "正在检查上下文状态…"
-                                event.tool.startsWith(AgentToolDispatcher.MCP_PREFIX) -> "正在调用 MCP 工具…"
-                                else -> "正在${toolDispatcher.humanLabel(event.tool, event.args)}…"
-                            }
+                            _liveStepLabel.value = toolDispatcher.runningStatusLabel(event.tool, event.args)
                         }
                     }
 

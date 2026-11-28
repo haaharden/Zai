@@ -13,9 +13,9 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import com.self.zai.MainActivity
 import com.self.zai.R
-import com.self.zai.ZaiApplication
+import com.self.zai.model.AgentStopHandler
+import com.self.zai.model.ZaiComponentNames
 
 /**
  * Foreground service active only while Zai is executing a phone task.
@@ -35,7 +35,7 @@ class ZaiAgentService : Service() {
         instance = this
         when (intent?.action) {
             ACTION_STOP_TASK -> {
-                (application as? ZaiApplication)?.agentCoordinator?.stopActiveRun()
+                (application as? AgentStopHandler)?.stopActiveRun()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -100,7 +100,8 @@ class ZaiAgentService : Service() {
         val openPending = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java).apply {
+            Intent().apply {
+                setClassName(packageName, ZaiComponentNames.MAIN_ACTIVITY)
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -171,7 +172,8 @@ class ZaiAgentService : Service() {
                 val openPending = PendingIntent.getActivity(
                     context,
                     2,
-                    Intent(context, MainActivity::class.java).apply {
+                    Intent().apply {
+                        setClassName(context.packageName, ZaiComponentNames.MAIN_ACTIVITY)
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                             Intent.FLAG_ACTIVITY_SINGLE_TOP or
                             Intent.FLAG_ACTIVITY_REORDER_TO_FRONT

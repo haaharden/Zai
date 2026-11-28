@@ -3,49 +3,36 @@ package com.self.zai.assistant
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import com.self.zai.model.ActiveNotificationItem
+import com.self.zai.model.LiveNotificationSnapshotRegistry
+import com.self.zai.model.NotificationSnapshotSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-
-data class ActiveNotificationItem(
-    val packageName: String,
-    val title: String,
-    val text: String,
-    val postTimeMs: Long,
-) {
-    fun formatLine(appLabel: String? = null): String {
-        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(postTimeMs))
-        val source = appLabel?.ifBlank { packageName } ?: packageName
-        return buildString {
-            append("[$time] $source")
-            if (title.isNotBlank()) append(" · ").append(title)
-            if (text.isNotBlank()) append(": ").append(text)
-        }
-    }
-}
 
 /**
  * Optional, zero-persistence [NotificationListenerService] that lets Zai summarize or query
  * recent notifications on demand when the user grants Notification Access.
  */
-class ZaiNotificationListenerService : NotificationListenerService() {
+class ZaiNotificationListenerService : NotificationListenerService(), NotificationSnapshotSource {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
         instance = this
         _isConnected.value = true
+        LiveNotificationSnapshotRegistry.attach(this)
     }
 
     override fun onListenerDisconnected() {
+        LiveNotificationSnapshotRegistry.detach(this)
         if (instance === this) instance = null
         _isConnected.value = false
         super.onListenerDisconnected()
     }
 
-    fun snapshotRecentNotifications(limit: Int = 20): List<ActiveNotificationItem> {
+    override fun isConnected(): Boolean = _isConnected.value
+
+    override fun snapshotRecentNotifications(limit: Int): List<ActiveNotificationItem> {
         val active: Array<StatusBarNotification> = runCatching { activeNotifications }.getOrNull() ?: return emptyList()
         return active
             .asSequence()

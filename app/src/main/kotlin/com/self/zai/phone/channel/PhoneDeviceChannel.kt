@@ -85,7 +85,11 @@ class AndroidCompositeDeviceChannel(
         }
 
         if (DevicePermissionHelper.hasWriteSecureSettings(context)) {
-            if (DevicePermissionHelper.restoreAccessibilityViaSecureSettings(context).isSuccess) {
+            if (DevicePermissionHelper.restoreAccessibilityViaSecureSettings(
+                    context = context,
+                    isAccessibilityConnected = { ZaiAccessibilityService.isReallyConnected() },
+                ).isSuccess
+            ) {
                 return
             }
         }
@@ -98,7 +102,10 @@ class AndroidCompositeDeviceChannel(
                 forceRebind = true,
             ).isSuccess
         ) {
-            DevicePermissionHelper.awaitAccessibilityConnected(1_500L)
+            DevicePermissionHelper.awaitAccessibilityConnected(
+                isAccessibilityConnected = { ZaiAccessibilityService.isReallyConnected() },
+                timeoutMs = 1_500L,
+            )
         }
     }
 

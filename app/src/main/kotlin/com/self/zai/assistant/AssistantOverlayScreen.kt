@@ -66,8 +66,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.self.zai.model.CapturedScreenContext
 import com.self.zai.model.ChatMessage
 import com.self.zai.model.MessageRole
+import com.self.zai.model.VoiceListenState
 import com.self.zai.model.ModelOption
 import com.self.zai.model.PendingConfirmation
 import com.self.zai.ui.components.ZaiCopyIconButton

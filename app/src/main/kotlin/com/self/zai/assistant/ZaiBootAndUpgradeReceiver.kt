@@ -3,7 +3,7 @@ package com.self.zai.assistant
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import com.self.zai.ZaiApplication
+import com.self.zai.di.ZaiContainerProvider
 
 /**
  * Automatically heals `voice_interaction_service`, `voice_recognition_service`, and Accessibility
@@ -19,8 +19,7 @@ class ZaiBootAndUpgradeReceiver : BroadcastReceiver() {
         ) {
             return
         }
-        val app = context.applicationContext as? ZaiApplication ?: return
-        app.container.autoRestoreVoiceInteractionIfPossible()
-        app.container.autoRestoreAccessibilityIfPossible(force = true)
+        val host = context.applicationContext as? ZaiContainerProvider ?: return
+        host.container.deviceHealthCoordinator.onBootOrUpgrade()
     }
 }

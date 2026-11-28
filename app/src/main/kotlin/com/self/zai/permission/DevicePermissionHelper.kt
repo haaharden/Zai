@@ -16,13 +16,10 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
+import android.speech.RecognitionService
 import android.widget.Toast
 import androidx.core.content.ContextCompat
-import com.self.zai.assistant.VoiceSpeechController
-import com.self.zai.assistant.ZaiAssistActivity
-import com.self.zai.assistant.ZaiNotificationListenerService
-import com.self.zai.assistant.ZaiVoiceInteractionService
-import com.self.zai.phone.ZaiAccessibilityService
+import com.self.zai.model.ZaiComponentNames
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -33,12 +30,25 @@ data class AccessibilityRestorePlan(
     val withSelf: String,
 )
 
+/**
+ * Leaf-level Android permission & settings helper depending ONLY on `com.self.zai.model`.
+ * Zero imports of concrete Activity/Service classes so there are zero package cycles.
+ */
 object DevicePermissionHelper {
 
     private const val EXTRA_FRAGMENT_ARG_KEY = ":settings:fragment_args_key"
     private const val EXTRA_SHOW_FRAGMENT_ARGS = ":settings:show_fragment_args"
     private const val REBIND_TOGGLE_DELAY_MS = 180L
     private const val BIND_POLL_INTERVAL_MS = 50L
+
+    private fun accessibilityComponent(context: Context): ComponentName =
+        ComponentName(context.packageName, ZaiComponentNames.ACCESSIBILITY_SERVICE)
+
+    private fun voiceInteractionComponent(context: Context): ComponentName =
+        ComponentName(context.packageName, ZaiComponentNames.VOICE_INTERACTION_SERVICE)
+
+    private fun notificationListenerComponent(context: Context): ComponentName =
+        ComponentName(context.packageName, ZaiComponentNames.NOTIFICATION_LISTENER_SERVICE)
 
     fun isXiaomiDevice(): Boolean {
         val brand = Build.BRAND.lowercase()
@@ -113,7 +123,7 @@ object DevicePermissionHelper {
     }
 
     fun isAccessibilityEnabledInSettings(context: Context): Boolean {
-        val component = ComponentName(context, ZaiAccessibilityService::class.java)
+        val component = accessibilityComponent(context)
         val raw = runCatching {
             Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
         }.getOrNull()
@@ -167,7 +177,7 @@ object DevicePermissionHelper {
     }
 
     fun isVoiceInteractionActiveInSettings(context: Context): Boolean {
-        val component = ComponentName(context, ZaiVoiceInteractionService::class.java)
+        val component = voiceInteractionComponent(context)
         val raw = runCatching {
             Settings.Secure.getString(context.contentResolver, "voice_interaction_service")
         }.getOrNull()
@@ -180,21 +190,56 @@ object DevicePermissionHelper {
 
     /**
      * True when Zai is selected as the system default assistant (`ROLE_ASSISTANT` / `assistant`),
-     * yet HyperOS/Android cleared `voice_interaction_service` to empty (causing Power 0.5s to
-     * fail with ActivityStarterImpl result -92 trying to launch ZaiVoiceInteractionService as Activity).
+     * yet HyperOS/Android cleared `voice_interaction_service` to empty.
      */
     fun needsVoiceInteractionRepair(context: Context): Boolean =
         isDefaultAssistant(context) && !isVoiceInteractionActiveInSettings(context)
 
+    fun currentConfiguredRecognitionService(context: Context): ComponentName? {
+        val raw = runCatching {
+            Settings.Secure.getString(context.contentResolver, "voice_recognition_service")
+        }.getOrNull()?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        return ComponentName.unflattenFromString(raw)
+    }
+
+    fun ensureSystemVoiceRecognitionService(context: Context, externalComponent: ComponentName?) {
+        if (externalComponent == null) return
+        val current = currentConfiguredRecognitionService(context)
+        if (current != null && current.packageName != context.packageName) return
+        if (!hasWriteSecureSettings(context)) return
+        runCatching {
+            Settings.Secure.putString(
+                context.contentResolver,
+                "voice_recognition_service",
+                externalComponent.flattenToString(),
+            )
+        }
+    }
+
+    fun resolveExternalRecognitionService(context: Context): ComponentName? {
+        val intent = Intent(RecognitionService.SERVICE_INTERFACE)
+        val resolved = runCatching {
+            context.packageManager.queryIntentServices(intent, 0)
+        }.getOrDefault(emptyList())
+            .mapNotNull { it.serviceInfo }
+            .filter { it.enabled && it.packageName != context.packageName }
+
+        if (resolved.isEmpty()) return null
+        val preferred = resolved.firstOrNull { it.packageName == "com.xiaomi.mibrain.speech" }
+            ?: resolved.firstOrNull { it.packageName.contains("google") }
+            ?: resolved.first()
+        return ComponentName(preferred.packageName, preferred.name)
+    }
+
     /**
      * Restores `Settings.Secure.voice_interaction_service` (and preserves external ASR in
      * `voice_recognition_service`) when Zai holds `WRITE_SECURE_SETTINGS`.
-     * Returns `true` if a repair write was performed, `false` if already healthy.
      */
     fun restoreVoiceInteractionServiceIfNeeded(context: Context): Result<Boolean> = runCatching {
         if (!needsVoiceInteractionRepair(context)) return@runCatching false
         require(hasWriteSecureSettings(context)) { "未授予 WRITE_SECURE_SETTINGS 权限" }
-        val component = ComponentName(context, ZaiVoiceInteractionService::class.java).flattenToString()
+        val component = voiceInteractionComponent(context).flattenToString()
         val okVoice = Settings.Secure.putString(
             context.contentResolver,
             "voice_interaction_service",
@@ -206,14 +251,14 @@ object DevicePermissionHelper {
         if (!currentAssist.startsWith("${context.packageName}/")) {
             Settings.Secure.putString(context.contentResolver, "assistant", component)
         }
-        val externalAsr = VoiceSpeechController.resolveExternalRecognitionService(context.applicationContext)
-        VoiceSpeechController.ensureSystemVoiceRecognitionService(context.applicationContext, externalAsr)
+        val externalAsr = resolveExternalRecognitionService(context.applicationContext)
+        ensureSystemVoiceRecognitionService(context.applicationContext, externalAsr)
         require(okVoice) { "系统拒绝写入 voice_interaction_service" }
         true
     }
 
     fun isNotificationListenerEnabled(context: Context): Boolean {
-        val expected = ComponentName(context, ZaiNotificationListenerService::class.java).flattenToString()
+        val expected = notificationListenerComponent(context).flattenToString()
         val raw = runCatching {
             Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
         }.getOrNull().orEmpty()
@@ -235,13 +280,14 @@ object DevicePermissionHelper {
     }
 
     fun openAssistOverlayPreview(context: Context) {
-        val intent = Intent(context, ZaiAssistActivity::class.java).apply {
+        val intent = Intent().apply {
+            setClassName(context.packageName, ZaiComponentNames.ASSIST_ACTIVITY)
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_NO_ANIMATION or
                     Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS,
             )
-            putExtra(ZaiAssistActivity.EXTRA_FROM_ASSISTANT, true)
+            putExtra(ZaiComponentNames.EXTRA_FROM_ASSISTANT, true)
         }
         startSafe(context, intent)
     }
@@ -265,33 +311,28 @@ object DevicePermissionHelper {
         }.getOrNull()
     }
 
-    /**
-     * Waits up to [timeoutMs] for [ZaiAccessibilityService] to report an active binder connection.
-     */
-    suspend fun awaitAccessibilityConnected(timeoutMs: Long = 1_500L): Boolean {
-        if (ZaiAccessibilityService.isReallyConnected()) return true
+    suspend fun awaitAccessibilityConnected(
+        isAccessibilityConnected: () -> Boolean,
+        timeoutMs: Long = 1_500L,
+    ): Boolean {
+        if (isAccessibilityConnected()) return true
         val deadline = System.currentTimeMillis() + timeoutMs.coerceAtLeast(100L)
         while (System.currentTimeMillis() < deadline) {
             delay(BIND_POLL_INTERVAL_MS)
-            if (ZaiAccessibilityService.isReallyConnected()) return true
+            if (isAccessibilityConnected()) return true
         }
-        return ZaiAccessibilityService.isReallyConnected()
+        return isAccessibilityConnected()
     }
 
-    /**
-     * Restores Zai's AccessibilityService directly via Android Secure Settings without needing Shizuku
-     * or Developer Options (requires a one-time `adb shell pm grant com.self.zai android.permission.WRITE_SECURE_SETTINGS`).
-     * If the service is already listed in `enabled_accessibility_services` but unbound, performs a brief
-     * off -> on toggle so Android's AccessibilityManagerService reliably re-binds the service.
-     */
     suspend fun restoreAccessibilityViaSecureSettings(
         context: Context,
+        isAccessibilityConnected: () -> Boolean,
         waitForBindTimeoutMs: Long = 1_500L,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            if (ZaiAccessibilityService.isReallyConnected()) return@runCatching
+            if (isAccessibilityConnected()) return@runCatching
             require(hasWriteSecureSettings(context)) { "未授予 WRITE_SECURE_SETTINGS 权限" }
-            val component = ComponentName(context, ZaiAccessibilityService::class.java)
+            val component = accessibilityComponent(context)
             val existingRaw = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
@@ -320,7 +361,7 @@ object DevicePermissionHelper {
                 1,
             )
             require(ok1 && ok2) { "系统拒绝写入无障碍配置" }
-            val bound = awaitAccessibilityConnected(waitForBindTimeoutMs)
+            val bound = awaitAccessibilityConnected(isAccessibilityConnected, waitForBindTimeoutMs)
             require(bound) {
                 "已写入无障碍配置，但系统未完成绑定，请在无障碍页面手动确认（如开关变灰请先允许受限制的设置）"
             }
@@ -341,10 +382,14 @@ object DevicePermissionHelper {
         }
     }
 
-    fun openAccessibilitySettings(context: Context, showGuideToast: Boolean = true) {
-        val component = ComponentName(context, ZaiAccessibilityService::class.java)
+    fun openAccessibilitySettings(
+        context: Context,
+        isCurrentlyConnected: Boolean = false,
+        showGuideToast: Boolean = true,
+    ) {
+        val component = accessibilityComponent(context)
         val wasSettingOnButUnbound =
-            isAccessibilityEnabledInSettings(context) && !ZaiAccessibilityService.isReallyConnected()
+            isAccessibilityEnabledInSettings(context) && !isCurrentlyConnected
 
         val launched = startSafe(
             context = context,

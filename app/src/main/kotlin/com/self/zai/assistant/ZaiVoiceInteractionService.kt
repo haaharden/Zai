@@ -12,7 +12,9 @@ import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
 import android.view.View
 import com.self.zai.R
-import com.self.zai.ZaiApplication
+import com.self.zai.agent.AssistantSessionBridge
+import com.self.zai.di.ZaiContainerProvider
+import com.self.zai.model.CapturedScreenContext
 import com.self.zai.phone.ZaiAccessibilityService
 
 /**
@@ -38,6 +40,8 @@ class ZaiVoiceInteractionSessionService : VoiceInteractionSessionService() {
 
 class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(context) {
 
+    private fun container() = (context.applicationContext as? ZaiContainerProvider)?.container
+
     override fun onCreate() {
         super.onCreate()
         setDisabledShowContext(SHOW_WITH_ASSIST or SHOW_WITH_SCREENSHOT)
@@ -50,7 +54,6 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
         super.onPrepareShow(args, showFlags)
         // Android's VoiceInteractionSession.doShow() resets mUiEnabled=true before calling onPrepareShow()
         // and calls mWindow.show() immediately after if mUiEnabled is still true.
-        // Calling setUiEnabled(false) HERE prevents the default white system dialog from ever showing!
         setUiEnabled(false)
     }
 
@@ -60,14 +63,15 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
+        val bridge = container()?.assistantSessionBridge
         // Single-handed toggle: holding Power 0.5s while the overlay is already open dismisses it.
-        if (AssistantContextBridge.shouldToggleDismissOnReinvoke()) {
-            AssistantContextBridge.requestDismissOverlay()
+        if (bridge?.shouldToggleDismissOnReinvoke() == true) {
+            bridge.requestDismissOverlay()
             hide()
             return
         }
         // Always discard any previous app's snapshot before capturing the current foreground screen.
-        AssistantContextBridge.clearScreenContext()
+        bridge?.clearScreenContext()
         if (!isKeyguardLocked()) {
             captureForegroundViaAccessibility()
         }
@@ -81,9 +85,6 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
             putExtra(ZaiAssistActivity.EXTRA_FROM_ASSISTANT, true)
             putExtra(ZaiAssistActivity.EXTRA_SHOW_FLAGS, showFlags)
         }
-        // Launch as a standard translucent Activity first so HyperOS never renders a white
-        // ACTIVITY_TYPE_ASSISTANT starting frame or closes it on session hide().
-        // Fall back to startAssistantActivity() only if context.startActivity() throws.
         val launched = runCatching {
             context.startActivity(intent)
             true
@@ -97,31 +98,30 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
     override fun onHandleAssist(state: AssistState) {
         super.onHandleAssist(state)
         if (isKeyguardLocked()) return
-        // Prefer richer Accessibility tree if already captured, otherwise fill from AssistStructure.
-        val existing = AssistantContextBridge.currentValidScreenContext()
-        if (existing != null) return
-        val extracted = AssistantContextBridge.extractAssistStructureSummary(state.assistStructure) ?: return
-        val app = context.applicationContext as? ZaiApplication
-        val resolvedLabel = app?.container?.appDirectory?.resolveAppLabel(extracted.packageName)
-            ?.takeIf { it.isNotBlank() }
+        val c = container() ?: return
+        val bridge = c.assistantSessionBridge
+        if (bridge.currentValidScreenContext() != null) return
+        val extracted = AssistantSessionBridge.extractAssistStructureSummary(state.assistStructure) ?: return
+        val resolvedLabel = c.appDirectory.resolveAppLabel(extracted.packageName)
+            .takeIf { it.isNotBlank() }
             ?: extracted.appLabel
-        AssistantContextBridge.updateScreenContext(extracted.copy(appLabel = resolvedLabel))
+        bridge.updateScreenContext(extracted.copy(appLabel = resolvedLabel))
     }
 
     private fun isKeyguardLocked(): Boolean =
         (context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
 
     private fun captureForegroundViaAccessibility() {
+        val c = container() ?: return
         val svc = ZaiAccessibilityService.instance ?: return
         val metrics = context.resources.displayMetrics
         val snap = runCatching { svc.captureScreenTree(metrics.widthPixels, metrics.heightPixels) }.getOrNull()
             ?: return
         if (snap.packageName.isBlank() || snap.packageName == context.packageName) return
-        val app = context.applicationContext as? ZaiApplication
-        val label = app?.container?.appDirectory?.resolveAppLabel(snap.packageName)
-            ?.takeIf { it.isNotBlank() }
+        val label = c.appDirectory.resolveAppLabel(snap.packageName)
+            .takeIf { it.isNotBlank() }
             ?: snap.packageName.substringAfterLast('.')
-        AssistantContextBridge.updateScreenContext(
+        c.assistantSessionBridge.updateScreenContext(
             CapturedScreenContext(
                 packageName = snap.packageName,
                 appLabel = label,
@@ -134,7 +134,6 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
 /**
  * Minimal same-package [RecognitionService] declared in `zai_voice_interaction.xml` so Android's
  * [android.service.voice.VoiceInteractionServiceInfo] validator accepts Zai as a full system assistant.
- * Zai's own [VoiceSpeechController] binds directly to the device's system ASR service (e.g., Xiaomi Speech).
  */
 class ZaiRecognitionService : RecognitionService() {
     override fun onStartListening(recognizerIntent: Intent?, listener: Callback?) {

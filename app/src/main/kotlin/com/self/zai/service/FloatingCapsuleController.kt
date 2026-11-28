@@ -23,7 +23,7 @@ import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.self.zai.MainActivity
+import com.self.zai.model.ZaiComponentNames
 import com.self.zai.phone.ZaiAccessibilityService
 import kotlin.math.abs
 
@@ -385,7 +385,8 @@ class FloatingCapsuleController(
                 MotionEvent.ACTION_UP -> {
                     if (!moved) {
                         onOpenRunningSession()
-                        val openIntent = Intent(context, MainActivity::class.java).apply {
+                        val openIntent = Intent().apply {
+                            setClassName(context.packageName, ZaiComponentNames.MAIN_ACTIVITY)
                             addFlags(
                                 Intent.FLAG_ACTIVITY_NEW_TASK or
                                     Intent.FLAG_ACTIVITY_SINGLE_TOP or

@@ -15,18 +15,13 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import com.self.zai.model.TtsReadoutMode
+import com.self.zai.model.VoiceListenState
 import com.self.zai.permission.DevicePermissionHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 import java.util.UUID
-
-enum class VoiceListenState {
-    IDLE,
-    LISTENING,
-    ERROR,
-}
 
 /**
  * Clean Android speech controller wrapping:
@@ -320,52 +315,14 @@ class VoiceSpeechController(
     }
 
     companion object {
-        fun currentConfiguredRecognitionService(context: Context): ComponentName? {
-            val raw = runCatching {
-                Settings.Secure.getString(context.contentResolver, "voice_recognition_service")
-            }.getOrNull()?.trim().orEmpty()
-            if (raw.isEmpty()) return null
-            return ComponentName.unflattenFromString(raw)
-        }
+        fun currentConfiguredRecognitionService(context: Context): ComponentName? =
+            DevicePermissionHelper.currentConfiguredRecognitionService(context)
 
-        /**
-         * On Android 13-16 / HyperOS, if `voice_recognition_service` is null (e.g. after switching
-         * default assistant away from XiaoAi), the OS refuses to proxy `RECORD_AUDIO` attribution
-         * to `com.xiaomi.mibrain.speech` and silences audio capture (`App op 27 missing`).
-         * When Zai holds `WRITE_SECURE_SETTINGS`, self-heal this setting automatically.
-         */
-        fun ensureSystemVoiceRecognitionService(context: Context, externalComponent: ComponentName?) {
-            if (externalComponent == null) return
-            val current = currentConfiguredRecognitionService(context)
-            if (current != null && current.packageName != context.packageName) return
-            if (!DevicePermissionHelper.hasWriteSecureSettings(context)) return
-            runCatching {
-                Settings.Secure.putString(
-                    context.contentResolver,
-                    "voice_recognition_service",
-                    externalComponent.flattenToString(),
-                )
-            }
-        }
+        fun ensureSystemVoiceRecognitionService(context: Context, externalComponent: ComponentName?) =
+            DevicePermissionHelper.ensureSystemVoiceRecognitionService(context, externalComponent)
 
-        /**
-         * Resolves a real external [RecognitionService] installed on the device, preferring Xiaomi's
-         * built-in speech engine on HyperOS/MIUI and never selecting Zai's own stub service.
-         */
-        fun resolveExternalRecognitionService(context: Context): ComponentName? {
-            val intent = Intent(RecognitionService.SERVICE_INTERFACE)
-            val resolved = runCatching {
-                context.packageManager.queryIntentServices(intent, 0)
-            }.getOrDefault(emptyList())
-                .mapNotNull { it.serviceInfo }
-                .filter { it.enabled && it.packageName != context.packageName }
-
-            if (resolved.isEmpty()) return null
-            val preferred = resolved.firstOrNull { it.packageName == "com.xiaomi.mibrain.speech" }
-                ?: resolved.firstOrNull { it.packageName.contains("google") }
-                ?: resolved.first()
-            return ComponentName(preferred.packageName, preferred.name)
-        }
+        fun resolveExternalRecognitionService(context: Context): ComponentName? =
+            DevicePermissionHelper.resolveExternalRecognitionService(context)
 
         fun isHeadsetConnected(context: Context): Boolean {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false

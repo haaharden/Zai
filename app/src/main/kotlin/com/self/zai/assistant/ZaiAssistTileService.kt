@@ -8,7 +8,8 @@ import android.content.Intent
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import com.self.zai.ZaiApplication
+import com.self.zai.di.ZaiContainerProvider
+import com.self.zai.model.CapturedScreenContext
 import com.self.zai.phone.ZaiAccessibilityService
 
 /**
@@ -26,21 +27,22 @@ class ZaiAssistTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        if (AssistantContextBridge.shouldToggleDismissOnReinvoke()) {
-            AssistantContextBridge.requestDismissOverlay()
+        val container = (applicationContext as? ZaiContainerProvider)?.container
+        val bridge = container?.assistantSessionBridge
+        if (bridge?.shouldToggleDismissOnReinvoke() == true) {
+            bridge.requestDismissOverlay()
             return
         }
-        AssistantContextBridge.clearScreenContext()
+        bridge?.clearScreenContext()
         val isLocked = (getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked == true
         val svc = if (isLocked) null else ZaiAccessibilityService.instance
-        if (svc != null) {
+        if (svc != null && container != null) {
             val dm = resources.displayMetrics
             val snap = runCatching { svc.captureScreenTree(dm.widthPixels, dm.heightPixels) }.getOrNull()
             if (snap != null && snap.packageName.isNotBlank() && snap.packageName != packageName) {
-                val app = applicationContext as? ZaiApplication
-                val label = app?.container?.appDirectory?.resolveAppLabel(snap.packageName)
-                    ?.takeIf { it.isNotBlank() } ?: snap.packageName.substringAfterLast('.')
-                AssistantContextBridge.updateScreenContext(
+                val label = container.appDirectory.resolveAppLabel(snap.packageName)
+                    .takeIf { it.isNotBlank() } ?: snap.packageName.substringAfterLast('.')
+                bridge?.updateScreenContext(
                     CapturedScreenContext(
                         packageName = snap.packageName,
                         appLabel = label,

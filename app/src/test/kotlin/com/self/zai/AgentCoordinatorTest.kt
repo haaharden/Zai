@@ -5,8 +5,13 @@ import android.graphics.Rect
 import com.self.zai.agent.AgentCoordinator
 import com.self.zai.agent.AgentToolDispatcher
 import com.self.zai.agent.AppReturnNavigator
+import com.self.zai.agent.CapabilitiesManager
 import com.self.zai.agent.ModelSelectionManager
 import com.self.zai.agent.RunChromeHost
+import com.self.zai.agent.RunEventBus
+import com.self.zai.web.WebPageContent
+import com.self.zai.web.WebSearchClient
+import com.self.zai.web.WebSearchResponse
 import com.self.zai.data.CredentialVault
 import com.self.zai.data.SessionRepository
 import com.self.zai.data.SettingsStore
@@ -144,21 +149,20 @@ class AgentCoordinatorTest {
             ),
         )
 
+        val bus = RunEventBus()
         val phoneController = PhoneController(repo, StubDeviceChannel(), StubAppDirectory())
         val fakeMcp = StubMcpClient()
         val dispatcher = AgentToolDispatcher(repo, vault, phoneController, fakeMcp)
-        lateinit var coordinator: AgentCoordinator
-        val modelSelection = ModelSelectionManager(repo, vault, runtime) { coordinator.invalidateSessionConfig(it) }
-        coordinator = AgentCoordinator(
+        val modelSelection = ModelSelectionManager(repo, vault, runtime) { bus.invalidateSessionConfig(it) }
+        val coordinator = AgentCoordinator(
             repository = repo,
-            credentialVault = vault,
             runtime = runtime,
             phoneController = phoneController,
             toolDispatcher = dispatcher,
-            mcpClient = fakeMcp,
             modelSelection = modelSelection,
             returnNavigator = navigator,
             chromeHost = chrome,
+            runEventBus = bus,
             mainDispatcher = Dispatchers.Unconfined,
         )
 
@@ -273,29 +277,28 @@ class AgentCoordinatorTest {
             mcpClient = fakeMcp,
         )
 
-        lateinit var coordinator: AgentCoordinator
+        val bus = RunEventBus()
         val modelSelection = ModelSelectionManager(
             repository = repo,
             credentialVault = vault,
             runtime = runtime,
-            onSessionConfigInvalidated = { coordinator.invalidateSessionConfig(it) },
+            onSessionConfigInvalidated = { bus.invalidateSessionConfig(it) },
         )
-        coordinator = AgentCoordinator(
+        val coordinator = AgentCoordinator(
             repository = repo,
-            credentialVault = vault,
             runtime = runtime,
             phoneController = phoneController,
             toolDispatcher = dispatcher,
-            mcpClient = fakeMcp,
             modelSelection = modelSelection,
             returnNavigator = navigator,
             chromeHost = chrome,
+            runEventBus = bus,
             mainDispatcher = Dispatchers.Unconfined,
         )
 
         // Default model auto-selected & thinking clamped from "off" -> "minimal"
-        assertEquals("gpt-6.2-sol", coordinator.defaultModelOption()?.id)
-        assertEquals("minimal", coordinator.defaultThinkingLevel())
+        assertEquals("gpt-6.2-sol", modelSelection.defaultModelOption()?.id)
+        assertEquals("minimal", modelSelection.defaultThinkingLevel())
 
         // Send user prompt and verify ordered streaming
         val sendRes = coordinator.sendUserMessage("帮我打开设置")
@@ -362,21 +365,20 @@ class AgentCoordinatorTest {
             ),
         )
 
+        val bus = RunEventBus()
         val phoneController = PhoneController(repo, StubDeviceChannel(), StubAppDirectory())
         val fakeMcp = StubMcpClient()
         val dispatcher = AgentToolDispatcher(repo, vault, phoneController, fakeMcp)
-        lateinit var coordinator: AgentCoordinator
-        val modelSelection = ModelSelectionManager(repo, vault, runtime) { coordinator.invalidateSessionConfig(it) }
-        coordinator = AgentCoordinator(
+        val modelSelection = ModelSelectionManager(repo, vault, runtime) { bus.invalidateSessionConfig(it) }
+        val coordinator = AgentCoordinator(
             repository = repo,
-            credentialVault = vault,
             runtime = runtime,
             phoneController = phoneController,
             toolDispatcher = dispatcher,
-            mcpClient = fakeMcp,
             modelSelection = modelSelection,
             returnNavigator = navigator,
             chromeHost = chrome,
+            runEventBus = bus,
             mainDispatcher = Dispatchers.Unconfined,
         )
 
@@ -414,7 +416,8 @@ class AgentCoordinatorTest {
         assertEquals(1, chrome.fgsStopCount)
 
         // Compaction settings update invalidates config & tracks ContextUsage events
-        coordinator.updateCompactionSettings(CompactionMode.AUTO, 65)
+        val capabilities = CapabilitiesManager(repo, vault, fakeMcp, StubWebSearchClient()) { bus.invalidateSessionConfig(null) }
+        capabilities.updateCompactionSettings(CompactionMode.AUTO, 65)
         assertEquals(CompactionMode.AUTO, repo.settings.value.compactionMode)
         assertEquals(65, repo.settings.value.compactionThresholdPercent)
 
@@ -516,20 +519,19 @@ class AgentCoordinatorTest {
             ),
         )
 
+        val bus = RunEventBus()
         val phoneController = PhoneController(repo, StubDeviceChannel(), StubAppDirectory())
         val dispatcher = AgentToolDispatcher(repo, vault, phoneController, StubMcpClient())
-        lateinit var coordinator: AgentCoordinator
-        val modelSelection = ModelSelectionManager(repo, vault, runtime) { coordinator.invalidateSessionConfig(it) }
-        coordinator = AgentCoordinator(
+        val modelSelection = ModelSelectionManager(repo, vault, runtime) { bus.invalidateSessionConfig(it) }
+        val coordinator = AgentCoordinator(
             repository = repo,
-            credentialVault = vault,
             runtime = runtime,
             phoneController = phoneController,
             toolDispatcher = dispatcher,
-            mcpClient = StubMcpClient(),
             modelSelection = modelSelection,
             returnNavigator = navigator,
             chromeHost = chrome,
+            runEventBus = bus,
             mainDispatcher = Dispatchers.Unconfined,
         )
 
@@ -556,7 +558,7 @@ class AgentCoordinatorTest {
         )
 
         // 1. Text-only model rejects image attachments cleanly without mutating session messages
-        coordinator.selectSessionModel("custom_p", "text-1")
+        modelSelection.selectSessionModel(coordinator.currentSession(), "custom_p", "text-1")
         val blocked = coordinator.sendUserMessage("", attachments = listOf(photo))
         assertTrue(blocked.isFailure)
         assertTrue(coordinator.currentSession().messages.isEmpty())
@@ -571,7 +573,7 @@ class AgentCoordinatorTest {
 
         // 3. Vision model forwards image payload even when user text is empty
         val visionSession = coordinator.startNewSession()
-        coordinator.selectSessionModel("custom_p", "vision-1")
+        modelSelection.selectSessionModel(coordinator.currentSession(), "custom_p", "vision-1")
         val imgOk = coordinator.sendUserMessage("", attachments = listOf(photo))
         assertTrue(imgOk.isSuccess)
         assertEquals(1, runtime.lastPromptImages.size)
@@ -608,20 +610,19 @@ class AgentCoordinatorTest {
                 ),
             ),
         )
+        val bus = RunEventBus()
         val phoneController = PhoneController(repo, StubDeviceChannel(), StubAppDirectory())
         val dispatcher = AgentToolDispatcher(repo, vault, phoneController, StubMcpClient())
-        lateinit var coordinator: AgentCoordinator
-        val modelSelection = ModelSelectionManager(repo, vault, runtime) { coordinator.invalidateSessionConfig(it) }
-        coordinator = AgentCoordinator(
+        val modelSelection = ModelSelectionManager(repo, vault, runtime) { bus.invalidateSessionConfig(it) }
+        val coordinator = AgentCoordinator(
             repository = repo,
-            credentialVault = vault,
             runtime = runtime,
             phoneController = phoneController,
             toolDispatcher = dispatcher,
-            mcpClient = StubMcpClient(),
             modelSelection = modelSelection,
             returnNavigator = FakeReturnNavigator(true),
             chromeHost = FakeChromeHost(),
+            runEventBus = bus,
             mainDispatcher = Dispatchers.Unconfined,
         )
 
@@ -756,6 +757,18 @@ class AgentCoordinatorTest {
             arguments: JSONObject,
         ): ToolExecutionResult = ToolExecutionResult("ok")
         override fun invalidateSession(serverUrl: String) {}
+    }
+
+    private class StubWebSearchClient : WebSearchClient {
+        override suspend fun search(
+            query: String,
+            maxResults: Int,
+            priority: List<com.self.zai.model.WebSearchProvider>,
+            apiKeys: Map<com.self.zai.model.WebSearchProvider, String>,
+        ): Result<WebSearchResponse> = Result.failure(UnsupportedOperationException())
+
+        override suspend fun fetchUrl(url: String, maxChars: Int): Result<WebPageContent> =
+            Result.failure(UnsupportedOperationException())
     }
 
     private class StubDeviceChannel : PhoneDeviceChannel {

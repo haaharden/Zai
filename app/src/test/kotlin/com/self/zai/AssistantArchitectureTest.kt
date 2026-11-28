@@ -5,16 +5,17 @@ import android.graphics.Rect
 import com.self.zai.agent.AgentCoordinator
 import com.self.zai.agent.AgentToolDispatcher
 import com.self.zai.agent.AppReturnNavigator
+import com.self.zai.agent.AssistantSessionBridge
 import com.self.zai.agent.ModelSelectionManager
 import com.self.zai.agent.RunChromeHost
-import com.self.zai.assistant.AssistantContextBridge
-import com.self.zai.assistant.CapturedScreenContext
+import com.self.zai.agent.RunEventBus
 import com.self.zai.assistant.VoiceSpeechController
 import com.self.zai.data.CredentialVault
 import com.self.zai.data.SessionRepository
 import com.self.zai.mcp.McpToolClient
 import com.self.zai.model.AppSettings
 import com.self.zai.model.AuthUiState
+import com.self.zai.model.CapturedScreenContext
 import com.self.zai.model.ChatSession
 import com.self.zai.model.CustomProviderConfig
 import com.self.zai.model.McpServerConfig
@@ -154,15 +155,13 @@ class AssistantArchitectureTest {
         val dispatcher = AgentToolDispatcher(repo, vault, phoneController, mcp)
         var overlayDismissed = 0
 
-        lateinit var coordinator: AgentCoordinator
-        val modelSelection = ModelSelectionManager(repo, vault, runtime) { coordinator.invalidateSessionConfig(it) }
-        coordinator = AgentCoordinator(
+        val bus = RunEventBus()
+        val modelSelection = ModelSelectionManager(repo, vault, runtime) { bus.invalidateSessionConfig(it) }
+        val coordinator = AgentCoordinator(
             repository = repo,
-            credentialVault = vault,
             runtime = runtime,
             phoneController = phoneController,
             toolDispatcher = dispatcher,
-            mcpClient = mcp,
             modelSelection = modelSelection,
             returnNavigator = object : AppReturnNavigator {
                 override suspend fun attemptBringToFront(isForeground: () -> Boolean) = false
@@ -175,6 +174,7 @@ class AssistantArchitectureTest {
                 override fun stopForegroundService() {}
                 override fun postFinishedFallbackNotification(summary: String) {}
             },
+            runEventBus = bus,
             onDismissAssistantOverlay = { overlayDismissed++ },
             mainDispatcher = Dispatchers.Unconfined,
         )
@@ -197,7 +197,8 @@ class AssistantArchitectureTest {
 
     @Test
     fun contextBridge_clearsStaleScreenContext_andDebouncesReinvokeToggle() {
-        AssistantContextBridge.updateScreenContext(
+        val bridge = AssistantSessionBridge()
+        bridge.updateScreenContext(
             CapturedScreenContext(
                 packageName = "com.tencent.mm",
                 appLabel = "微信",
@@ -205,16 +206,16 @@ class AssistantArchitectureTest {
                 capturedAtMs = 1_000L,
             ),
         )
-        assertNotNull(AssistantContextBridge.currentValidScreenContext(nowMs = 5_000L))
-        AssistantContextBridge.clearScreenContext()
-        assertNull(AssistantContextBridge.currentValidScreenContext(nowMs = 5_000L))
+        assertNotNull(bridge.currentValidScreenContext(nowMs = 5_000L))
+        bridge.clearScreenContext()
+        assertNull(bridge.currentValidScreenContext(nowMs = 5_000L))
 
-        AssistantContextBridge.isOverlayVisible = true
-        AssistantContextBridge.overlayOpenedAtMs = 10_000L
-        assertFalse(AssistantContextBridge.shouldToggleDismissOnReinvoke(nowMs = 10_300L))
-        assertTrue(AssistantContextBridge.shouldToggleDismissOnReinvoke(nowMs = 10_800L))
-        AssistantContextBridge.isOverlayVisible = false
-        assertFalse(AssistantContextBridge.shouldToggleDismissOnReinvoke(nowMs = 12_000L))
+        bridge.isOverlayVisible = true
+        bridge.overlayOpenedAtMs = 10_000L
+        assertFalse(bridge.shouldToggleDismissOnReinvoke(nowMs = 10_300L))
+        assertTrue(bridge.shouldToggleDismissOnReinvoke(nowMs = 10_800L))
+        bridge.isOverlayVisible = false
+        assertFalse(bridge.shouldToggleDismissOnReinvoke(nowMs = 12_000L))
     }
 
     @Test

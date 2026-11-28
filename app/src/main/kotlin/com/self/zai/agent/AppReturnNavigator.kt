@@ -6,7 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import com.self.zai.MainActivity
+import com.self.zai.model.ZaiComponentNames
 import com.self.zai.phone.ZaiAccessibilityService
 import com.self.zai.service.ZaiAgentService
 import com.self.zai.shell.ShizukuBridge
@@ -35,7 +35,8 @@ class AndroidAppReturnNavigator(
 ) : AppReturnNavigator {
 
     override suspend fun attemptBringToFront(isForeground: () -> Boolean): Boolean {
-        val launchIntent = Intent(context, MainActivity::class.java).apply {
+        val launchIntent = Intent().apply {
+            setClassName(context.packageName, ZaiComponentNames.MAIN_ACTIVITY)
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -90,7 +91,7 @@ class AndroidAppReturnNavigator(
 
         // Attempt 3: Shizuku shell am start if ready
         if (shizuku.status.value.isReady) {
-            shizuku.exec("am start -n ${context.packageName}/${MainActivity::class.java.name}", 4_000)
+            shizuku.exec("am start -n ${context.packageName}/${ZaiComponentNames.MAIN_ACTIVITY}", 4_000)
             delay(360L)
             if (isForeground()) return true
         }
