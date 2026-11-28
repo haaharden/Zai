@@ -2,11 +2,16 @@ package com.self.zai.ui.chat
 
 import android.content.Context
 import android.content.Intent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.platform.LocalView
+import com.self.zai.ui.components.OpticalAuraRing
+import com.self.zai.ui.components.ZaiHaptics
+import com.self.zai.ui.components.ZaiMotion
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -71,8 +76,18 @@ internal fun EditorialEmptyCanvas(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ZaiEmblemMark(size = 46.dp)
-        Spacer(Modifier.height(22.dp))
+        Box(
+            modifier = Modifier.size(96.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            OpticalAuraRing(
+                energy = if (piReady) 0.45f else 0.75f,
+                active = !piReady,
+                modifier = Modifier.fillMaxSize(),
+            )
+            ZaiEmblemMark(size = 52.dp)
+        }
+        Spacer(Modifier.height(18.dp))
         Text(
             text = "有什么可以帮你？",
             style = MaterialTheme.typography.displaySmall,
@@ -81,7 +96,7 @@ internal fun EditorialEmptyCanvas(
         if (!piReady) {
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "启动中…",
+                text = "引擎启动中…",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -261,16 +276,22 @@ internal fun AssistantTurn(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (message.thinking.isNotBlank()) {
+            val view = LocalView.current
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                    .animateContentSize(animationSpec = ZaiMotion.SpringSizeSmooth)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                    ) { thinkingExpanded = !thinkingExpanded }
-                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                    ) {
+                        ZaiHaptics.tick(view)
+                        thinkingExpanded = !thinkingExpanded
+                    }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(

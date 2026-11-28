@@ -53,6 +53,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -424,7 +426,24 @@ fun ChatScreen(
                     item(key = "bottom_anchor") { Spacer(Modifier.height(10.dp)) }
                 }
 
-                val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
+                // Soft optical edge fades so messages glide gracefully behind the top bar & floating dock
+                val bg = MaterialTheme.colorScheme.background
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(14.dp)
+                        .background(Brush.verticalGradient(listOf(bg, Color.Transparent))),
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(16.dp)
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, bg))),
+                )
+
+                val isDark = bg.luminance() < 0.4f
                 androidx.compose.animation.AnimatedVisibility(
                     visible = canScrollDown && !autoFollowBottom,
                     enter = fadeIn(tween(160)),

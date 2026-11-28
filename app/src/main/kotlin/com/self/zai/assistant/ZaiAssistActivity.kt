@@ -132,6 +132,7 @@ class ZaiAssistActivity : ComponentActivity() {
             val pendingConfirmation by container.agentCoordinator.phoneController.pendingConfirmation.collectAsState()
             val capturedScreen by bridge.screenContext.collectAsState()
             val listenState by controller.listenState.collectAsState()
+            val rmsDb by controller.rmsDb.collectAsState()
             val isSpeaking by controller.isSpeaking.collectAsState()
 
             val activeSession = remember(sessions, activeSessionId) {
@@ -196,6 +197,7 @@ class ZaiAssistActivity : ComponentActivity() {
                     isRunning = isRunning,
                     liveStepLabel = liveStepLabel,
                     listenState = listenState,
+                    rmsDb = rmsDb,
                     isSpeaking = isSpeaking,
                     inputText = inputTextState.value,
                     onInputChange = { next ->

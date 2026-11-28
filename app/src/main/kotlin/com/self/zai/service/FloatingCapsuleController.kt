@@ -430,12 +430,12 @@ private class EdgeGlowView(context: Context) : View(context) {
     private val outerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 7f * density
-        color = Color.argb(56, 217, 119, 87)
+        color = Color.argb(56, 10, 132, 255)
     }
     private val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 2f * density
-        color = Color.argb(215, 217, 119, 87)
+        color = Color.argb(215, 10, 132, 255)
     }
     private val rect = RectF()
     private val cornerRadius = 34f * density
@@ -476,11 +476,11 @@ private class TapRippleView(context: Context) : View(context) {
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 2.5f * density
-        color = Color.rgb(217, 119, 87)
+        color = Color.rgb(10, 132, 255)
     }
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.argb(175, 217, 119, 87)
+        color = Color.argb(175, 10, 132, 255)
     }
     private var progress = 0f
 

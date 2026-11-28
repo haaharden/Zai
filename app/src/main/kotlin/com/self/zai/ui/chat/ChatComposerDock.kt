@@ -1,6 +1,7 @@
 package com.self.zai.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,6 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -51,7 +54,10 @@ import androidx.compose.ui.unit.sp
 import com.self.zai.model.ChatSession
 import com.self.zai.model.ThinkingLevelDisplay
 import com.self.zai.model.VoiceListenState
+import com.self.zai.ui.components.ZaiHaptics
 import com.self.zai.ui.components.ZaiInsetDivider
+import com.self.zai.ui.components.ZaiMotion
+import com.self.zai.ui.components.applePress
 
 @Composable
 internal fun SlashSkillPopup(
@@ -197,6 +203,8 @@ internal fun ComposerDock(
     onOpenLightbox: (ImageLightboxData) -> Unit,
     onSentSuccess: () -> Unit,
 ) {
+    val view = LocalView.current
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
     val isVoiceListening = state.voiceListenState == VoiceListenState.LISTENING
     val hasAttachments = state.pendingAttachments.isNotEmpty()
     val hasImageAttachments = state.pendingAttachments.any { it.promptImages.isNotEmpty() }
@@ -206,17 +214,19 @@ internal fun ComposerDock(
     Surface(
         shape = RoundedCornerShape(26.dp),
         color = MaterialTheme.colorScheme.surface,
+        shadowElevation = if (isDark) 0.dp else 6.dp,
         border = BorderStroke(
-            width = if (isVoiceListening) 1.dp else 0.5.dp,
+            width = if (isVoiceListening) 1.2.dp else 0.5.dp,
             color = if (isVoiceListening) {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
             } else {
                 MaterialTheme.colorScheme.outlineVariant
             },
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+            .padding(start = 16.dp, end = 16.dp, bottom = 10.dp)
+            .animateContentSize(animationSpec = ZaiMotion.SpringSizeSmooth),
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             AnimatedVisibility(visible = hasAttachments || state.importingAttachments) {
@@ -381,26 +391,30 @@ internal fun ComposerDock(
                 Spacer(Modifier.width(8.dp))
 
                 if (state.isRunning) {
-                    Surface(
-                        onClick = actions.onStopRun,
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                        modifier = Modifier.size(38.dp),
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.error)
+                            .applePress(scaleDown = 0.9f, hapticTick = false) {
+                                ZaiHaptics.reject(view)
+                                actions.onStopRun()
+                            },
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.Rounded.Stop,
-                                contentDescription = "立即停止",
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
+                        Icon(
+                            Icons.Rounded.Stop,
+                            contentDescription = "立即停止",
+                            tint = MaterialTheme.colorScheme.onError,
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                 }
 
                 if (!state.isRunning && (!hasPayloadToSend || isVoiceListening)) {
                     ChatMicButton(
                         listening = isVoiceListening,
+                        rmsDb = state.voiceRmsDb,
                         onClick = actions.onToggleVoiceInput,
                     )
                 }
@@ -408,37 +422,38 @@ internal fun ComposerDock(
                 if (hasPayloadToSend) {
                     if (state.isRunning || isVoiceListening) Spacer(Modifier.width(6.dp))
                     val canSend = state.piReady && !state.importingAttachments
-                    Surface(
-                        onClick = {
-                            if (canSend) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (canSend) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerLow
+                                },
+                            )
+                            .applePress(enabled = canSend, scaleDown = 0.9f, hapticTick = false) {
                                 if (isVoiceListening) actions.onCancelVoiceInput()
                                 val sent = actions.onSendMessage(state.inputText, state.pendingAttachments)
                                 if (sent) {
+                                    ZaiHaptics.confirm(view)
                                     actions.onInputTextChange("")
                                     onSentSuccess()
                                 }
-                            }
-                        },
-                        shape = CircleShape,
-                        color = if (canSend) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerLow
-                        },
-                        contentColor = if (canSend) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
-                        },
-                        modifier = Modifier.size(38.dp),
+                            },
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.Rounded.ArrowUpward,
-                                contentDescription = "发送",
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
+                        Icon(
+                            Icons.Rounded.ArrowUpward,
+                            contentDescription = "发送",
+                            tint = if (canSend) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                            },
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                 }
             }

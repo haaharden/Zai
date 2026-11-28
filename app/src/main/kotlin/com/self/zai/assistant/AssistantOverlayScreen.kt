@@ -1,6 +1,7 @@
 package com.self.zai.assistant
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -61,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,9 +74,13 @@ import com.self.zai.model.MessageRole
 import com.self.zai.model.VoiceListenState
 import com.self.zai.model.ModelOption
 import com.self.zai.model.PendingConfirmation
+import com.self.zai.ui.components.LiveVoiceWaveform
 import com.self.zai.ui.components.ZaiCopyIconButton
+import com.self.zai.ui.components.ZaiHaptics
 import com.self.zai.ui.components.ZaiMarkdownText
 import com.self.zai.ui.components.ZaiMonogramMark
+import com.self.zai.ui.components.ZaiMotion
+import com.self.zai.ui.components.applePress
 
 /**
  * Warm minimalist Anthropic-styled floating personal assistant bottom card.
@@ -88,6 +94,7 @@ fun AssistantOverlayScreen(
     isRunning: Boolean,
     liveStepLabel: String,
     listenState: VoiceListenState,
+    rmsDb: Float = 0f,
     isSpeaking: Boolean,
     inputText: String,
     onInputChange: (String) -> Unit,
@@ -136,8 +143,8 @@ fun AssistantOverlayScreen(
 
         AnimatedVisibility(
             visible = visible,
-            enter = slideInVertically(tween(180)) { it / 2 } + fadeIn(tween(160)),
-            exit = slideOutVertically(tween(140)) { it / 2 } + fadeOut(tween(120)),
+            enter = slideInVertically(ZaiMotion.SpringOffsetPage) { it / 2 } + fadeIn(tween(180)),
+            exit = slideOutVertically(ZaiMotion.SpringOffsetPage) { it / 2 } + fadeOut(tween(130)),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
@@ -145,13 +152,14 @@ fun AssistantOverlayScreen(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
             Surface(
-                shape = RoundedCornerShape(26.dp),
+                shape = RoundedCornerShape(28.dp),
                 color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant),
                 tonalElevation = 0.dp,
-                shadowElevation = 14.dp,
+                shadowElevation = 18.dp,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .animateContentSize(animationSpec = ZaiMotion.SpringSizeSmooth)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -464,15 +472,17 @@ fun AssistantOverlayScreen(
 
                         Spacer(Modifier.width(6.dp))
 
-                        // Mic button with calm pulse while listening
+                        // Mic button with live acoustic waveform reacting to rmsDb
                         MicPulseButton(
                             listening = isListening,
+                            rmsDb = rmsDb,
                             onClick = onToggleMic,
                         )
 
                         Spacer(Modifier.width(6.dp))
 
                         // Send or Stop circle button
+                        val view = LocalView.current
                         Box(
                             modifier = Modifier
                                 .size(36.dp)
@@ -484,8 +494,14 @@ fun AssistantOverlayScreen(
                                         else -> MaterialTheme.colorScheme.surfaceVariant
                                     },
                                 )
-                                .clickable(enabled = isRunning || canSend) {
-                                    if (isRunning) onStopRun() else onSend()
+                                .applePress(enabled = isRunning || canSend, scaleDown = 0.9f, hapticTick = false) {
+                                    if (isRunning) {
+                                        ZaiHaptics.reject(view)
+                                        onStopRun()
+                                    } else {
+                                        ZaiHaptics.confirm(view)
+                                        onSend()
+                                    }
                                 },
                             contentAlignment = Alignment.Center,
                         ) {
@@ -531,40 +547,34 @@ private fun OverlayIconPill(
 @Composable
 private fun MicPulseButton(
     listening: Boolean,
+    rmsDb: Float = 0f,
     onClick: () -> Unit,
 ) {
-    val pulse = if (listening) {
-        val transition = rememberInfiniteTransition(label = "micPulse")
-        val alpha by transition.animateFloat(
-            initialValue = 0.45f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
-            label = "micAlpha",
-        )
-        alpha
-    } else {
-        1f
-    }
-
     Box(
         modifier = Modifier
             .size(36.dp)
             .clip(CircleShape)
             .background(
-                if (listening) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                if (listening) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
                 else Color.Transparent,
             )
-            .clickable(onClick = onClick),
+            .applePress(scaleDown = 0.9f, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            imageVector = if (listening) Icons.Rounded.GraphicEq else Icons.Rounded.Mic,
-            contentDescription = if (listening) "停止语音" else "语音输入",
-            tint = if (listening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .size(20.dp)
-                .alpha(pulse),
-        )
+        if (listening) {
+            LiveVoiceWaveform(
+                rmsDb = rmsDb,
+                listening = true,
+                modifier = Modifier.size(width = 22.dp, height = 18.dp),
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.Mic,
+                contentDescription = "语音输入",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+        }
     }
 }
 

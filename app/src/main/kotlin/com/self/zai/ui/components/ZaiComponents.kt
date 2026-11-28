@@ -1,5 +1,8 @@
 package com.self.zai.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -8,15 +11,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -41,6 +47,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
@@ -50,7 +57,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * Quiet paper container with razor-thin hairline border and zero heavy elevation drop shadows.
+ * Apple inset-grouped surface container with soft ambient elevation in light mode
+ * and crisp optical hairline edge in dark / OLED modes.
  */
 @Composable
 fun ZaiPaperGroup(
@@ -59,6 +67,7 @@ fun ZaiPaperGroup(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -67,13 +76,14 @@ fun ZaiPaperGroup(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
+                    .padding(horizontal = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (title != null) {
                     Text(
                         text = title,
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
@@ -84,9 +94,10 @@ fun ZaiPaperGroup(
             }
         }
         Surface(
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = if (isDark) 0.dp else 1.5.dp,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -97,7 +108,7 @@ fun ZaiPaperGroup(
 }
 
 /**
- * Sleek segmented pill track replacing boxy default Material3 FilterChips.
+ * Apple-style segmented control with a true spring-sliding elevated pill thumb and X-axis tick haptics.
  */
 @Composable
 fun <T> ZaiSegmentedControl(
@@ -106,55 +117,84 @@ fun <T> ZaiSegmentedControl(
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(
+    if (options.isEmpty()) return
+    val view = LocalView.current
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
+    val selectedIndex = options.indexOfFirst { it.first == selected }.coerceAtLeast(0)
+
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(13.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(13.dp))
+            .height(38.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
             .padding(3.dp),
     ) {
+        val segmentWidth = maxWidth / options.size
+        val thumbOffset by animateDpAsState(
+            targetValue = segmentWidth * selectedIndex,
+            animationSpec = ZaiMotion.SpringDpSnappy,
+            label = "segThumbOffset",
+        )
+
+        // Sliding spring thumb
+        Box(
+            modifier = Modifier
+                .offset(x = thumbOffset)
+                .width(segmentWidth)
+                .fillMaxHeight()
+                .then(
+                    if (!isDark) {
+                        Modifier.shadow(2.dp, RoundedCornerShape(9.5.dp), clip = false)
+                    } else {
+                        Modifier
+                    },
+                )
+                .clip(RoundedCornerShape(9.5.dp))
+                .background(if (isDark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface)
+                .border(
+                    width = 0.5.dp,
+                    color = if (isDark) Color.White.copy(alpha = 0.12f) else Color.Black.copy(alpha = 0.04f),
+                    shape = RoundedCornerShape(9.5.dp),
+                ),
+        )
+
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             options.forEach { (value, label) ->
                 val isSelected = value == selected
+                val textColor by animateColorAsState(
+                    targetValue = if (isSelected) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    animationSpec = tween(160),
+                    label = "segTextColor",
+                )
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(
-                            if (isSelected) MaterialTheme.colorScheme.surface else Color.Transparent,
-                        )
-                        .then(
-                            if (isSelected) {
-                                Modifier.border(
-                                    0.5.dp,
-                                    MaterialTheme.colorScheme.outlineVariant,
-                                    RoundedCornerShape(10.dp),
-                                )
-                            } else {
-                                Modifier
-                            },
-                        )
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(9.5.dp))
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                        ) { onSelect(value) }
-                        .padding(horizontal = 6.dp, vertical = 8.dp),
+                        ) {
+                            if (value != selected) {
+                                ZaiHaptics.tick(view)
+                                onSelect(value)
+                            }
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = label,
                         style = MaterialTheme.typography.labelMedium,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.onSurface
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                        color = textColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.Center,
@@ -166,7 +206,7 @@ fun <T> ZaiSegmentedControl(
 }
 
 /**
- * Crisp tonal pill for selectable models or presets (inkstone active state, hairline quiet idle state).
+ * Crisp tactile pill with spring press physics, animated fill, and mechanical tick haptic.
  */
 @Composable
 fun ZaiSelectPill(
@@ -175,36 +215,48 @@ fun ZaiSelectPill(
     monospace: Boolean = false,
     onClick: () -> Unit,
 ) {
-    val bg = if (selected) {
-        MaterialTheme.colorScheme.onBackground
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerLow
-    }
-    val fg = if (selected) {
-        MaterialTheme.colorScheme.background
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-    val borderColor = if (selected) {
-        Color.Transparent
-    } else {
-        MaterialTheme.colorScheme.outlineVariant
-    }
+    val view = LocalView.current
+    val bg by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
+        animationSpec = tween(180),
+        label = "pillBg",
+    )
+    val fg by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        animationSpec = tween(180),
+        label = "pillFg",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) Color.Transparent else MaterialTheme.colorScheme.outlineVariant,
+        animationSpec = tween(180),
+        label = "pillBorder",
+    )
 
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
             .background(bg)
             .border(0.5.dp, borderColor, RoundedCornerShape(20.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 7.dp),
+            .applePress(hapticTick = false) {
+                ZaiHaptics.tick(view)
+                onClick()
+            }
+            .padding(horizontal = 14.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
             fontFamily = if (monospace) FontFamily.Monospace else FontFamily.SansSerif,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             color = fg,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -213,23 +265,23 @@ fun ZaiSelectPill(
 }
 
 /**
- * High-contrast tactile Switch palette tuned for Light, Dark, and Pure AMOLED OLED displays.
+ * High-contrast Apple-style Switch palette tuned for Light, Dark, and Pure AMOLED OLED displays.
  */
 @Composable
 fun zaiSwitchColors(): SwitchColors {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
     return SwitchDefaults.colors(
-        checkedThumbColor = Color(0xFFFFFCF9),
-        checkedTrackColor = MaterialTheme.colorScheme.primary,
+        checkedThumbColor = Color.White,
+        checkedTrackColor = MaterialTheme.colorScheme.secondary,
         checkedBorderColor = Color.Transparent,
-        uncheckedThumbColor = if (isDark) Color(0xFFC5C0B6) else Color.White,
-        uncheckedTrackColor = if (isDark) Color(0xFF36342F) else Color(0xFFDAD6CC),
+        uncheckedThumbColor = Color.White,
+        uncheckedTrackColor = if (isDark) Color(0xFF39393D) else Color(0xFFD1D1D6),
         uncheckedBorderColor = Color.Transparent,
     )
 }
 
 /**
- * Soft tonal text input replacing clunky default Material3 OutlinedTextFields.
+ * Soft tonal text input with smooth focus border transition.
  */
 @Composable
 fun ZaiTextField(
@@ -243,6 +295,15 @@ fun ZaiTextField(
     modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+        } else {
+            MaterialTheme.colorScheme.outlineVariant
+        },
+        animationSpec = tween(160),
+        label = "tfBorder",
+    )
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -262,12 +323,8 @@ fun ZaiTextField(
                 .clip(RoundedCornerShape(13.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerLow)
                 .border(
-                    width = if (focused) 1.dp else 0.5.dp,
-                    color = if (focused) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                    } else {
-                        MaterialTheme.colorScheme.outlineVariant
-                    },
+                    width = if (focused) 1.2.dp else 0.5.dp,
+                    color = borderColor,
                     shape = RoundedCornerShape(13.dp),
                 )
                 .padding(start = 14.dp, end = if (trailing != null) 4.dp else 14.dp),
@@ -284,7 +341,7 @@ fun ZaiTextField(
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontFamily = if (monospace) FontFamily.Monospace else FontFamily.SansSerif,
                         ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -324,6 +381,15 @@ fun ZaiMultilineField(
     modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+        } else {
+            MaterialTheme.colorScheme.outlineVariant
+        },
+        animationSpec = tween(160),
+        label = "mlBorder",
+    )
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -343,12 +409,8 @@ fun ZaiMultilineField(
                 .clip(RoundedCornerShape(14.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerLow)
                 .border(
-                    width = if (focused) 1.dp else 0.5.dp,
-                    color = if (focused) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                    } else {
-                        MaterialTheme.colorScheme.outlineVariant
-                    },
+                    width = if (focused) 1.2.dp else 0.5.dp,
+                    color = borderColor,
                     shape = RoundedCornerShape(14.dp),
                 )
                 .padding(horizontal = 14.dp, vertical = 12.dp),
@@ -381,7 +443,7 @@ fun ZaiMultilineField(
 }
 
 /**
- * Primary tactile ink pill button (restrained architectural fill, never screaming neon).
+ * Primary tactile Apple-grade pill button with spring press scale and linear-motor confirmation.
  */
 @Composable
 fun ZaiPrimaryButton(
@@ -390,13 +452,18 @@ fun ZaiPrimaryButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val bg = if (enabled) {
-        MaterialTheme.colorScheme.onBackground
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant
-    }
+    val view = LocalView.current
+    val bg by animateColorAsState(
+        targetValue = if (enabled) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        animationSpec = tween(160),
+        label = "primaryBtnBg",
+    )
     val fg = if (enabled) {
-        MaterialTheme.colorScheme.background
+        MaterialTheme.colorScheme.onPrimary
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -404,8 +471,11 @@ fun ZaiPrimaryButton(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
             .background(bg)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .applePress(enabled = enabled, scaleDown = 0.965f, hapticTick = false) {
+                ZaiHaptics.confirm(view)
+                onClick()
+            }
+            .padding(horizontal = 18.dp, vertical = 13.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -431,8 +501,8 @@ fun ZaiSecondaryButton(
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .applePress(enabled = enabled, scaleDown = 0.965f, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -447,7 +517,7 @@ fun ZaiSecondaryButton(
 }
 
 /**
- * Signature minimalist stacked-cards + four-point sparkle mark echoing Zai's porcelain app icon.
+ * Signature minimalist stacked-cards + four-point sparkle mark tuned to Zai's optical palette.
  */
 @Composable
 fun ZaiMonogramMark(
@@ -464,7 +534,6 @@ fun ZaiMonogramMark(
         val cardH = h * 0.62f
         val radius = CornerRadius(w * 0.14f, w * 0.14f)
 
-        // Back warm terracotta card tilted softly counter-clockwise
         rotate(degrees = -13f, pivot = Offset(w * 0.43f, h * 0.56f)) {
             drawRoundRect(
                 color = dotColor,
@@ -474,7 +543,6 @@ fun ZaiMonogramMark(
             )
         }
 
-        // Front deep ink card tilted gently clockwise
         rotate(degrees = 11f, pivot = Offset(w * 0.57f, h * 0.48f)) {
             drawRoundRect(
                 color = tint,
@@ -482,7 +550,6 @@ fun ZaiMonogramMark(
                 size = Size(cardW, cardH),
                 cornerRadius = radius,
             )
-            // Crisp four-point spark in the center of the front card
             val cx = w * 0.57f
             val cy = h * 0.47f
             val rOuter = w * 0.175f
@@ -501,29 +568,30 @@ fun ZaiMonogramMark(
 }
 
 /**
- * Refined warm porcelain seal emblem mirroring Zai's desktop icon for the empty chat canvas.
+ * Frosted titanium/porcelain emblem tile for the empty chat canvas.
  */
 @Composable
 fun ZaiEmblemMark(
-    size: Dp = 48.dp,
+    size: Dp = 50.dp,
     modifier: Modifier = Modifier,
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.4f
-    val tileBg = if (isDark) Color(0xFF282622) else Color(0xFFFDF8EF)
-    val tileBorder = MaterialTheme.colorScheme.outlineVariant
-    val frontCard = if (isDark) Color(0xFFF3EEE6) else Color(0xFF282521)
+    val tileBg = if (isDark) Color(0xFF1A1B1F) else Color(0xFFFFFFFF)
+    val tileBorder = if (isDark) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.08f)
+    val frontCard = if (isDark) Color(0xFFF5F5F7) else Color(0xFF1C1C1E)
     val backCard = MaterialTheme.colorScheme.primary
-    val sparkFill = if (isDark) Color(0xFF282622) else Color(0xFFFAF6EE)
+    val sparkFill = if (isDark) Color(0xFF1A1B1F) else Color(0xFFFFFFFF)
 
     Box(
         modifier = modifier
             .size(size)
+            .then(if (!isDark) Modifier.shadow(6.dp, RoundedCornerShape(size * 0.28f), clip = false) else Modifier)
             .clip(RoundedCornerShape(size * 0.28f))
             .background(tileBg)
             .border(0.6.dp, tileBorder, RoundedCornerShape(size * 0.28f)),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.size(size * 0.68f)) {
+        Canvas(modifier = Modifier.size(size * 0.66f)) {
             val w = this.size.width
             val h = this.size.height
             val cardW = w * 0.62f

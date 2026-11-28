@@ -12,6 +12,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -28,6 +35,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.core.view.WindowCompat
 import com.self.zai.di.AppContainer
 import com.self.zai.model.ThemeMode
@@ -39,6 +48,7 @@ import com.self.zai.ui.capabilities.SkillsScreen
 import com.self.zai.ui.chat.ChatActions
 import com.self.zai.ui.chat.ChatScreen
 import com.self.zai.ui.chat.ChatUiState
+import com.self.zai.ui.components.ZaiMotion
 import com.self.zai.ui.models.ModelsAndAuthScreen
 import com.self.zai.ui.settings.SettingsActions
 import com.self.zai.ui.settings.SettingsScreen
@@ -144,7 +154,24 @@ private fun ZaiRoot(
 ) {
     val settings by container.sessionRepository.settings.collectAsState()
     var route by remember { mutableStateOf(OverlayRoute.NONE) }
+    var lastActiveOverlay by remember { mutableStateOf(OverlayRoute.SETTINGS) }
     var latestRelease by remember { mutableStateOf<ReleaseUpdateInfo?>(null) }
+
+    if (route != OverlayRoute.NONE) {
+        lastActiveOverlay = route
+    }
+
+    val hasOverlay = route != OverlayRoute.NONE
+    val underlyingScale by animateFloatAsState(
+        targetValue = if (hasOverlay) 0.955f else 1f,
+        animationSpec = ZaiMotion.SpringSmooth,
+        label = "chatBackdropScale",
+    )
+    val scrimAlpha by animateFloatAsState(
+        targetValue = if (hasOverlay) 0.22f else 0f,
+        animationSpec = tween(220),
+        label = "chatBackdropScrim",
+    )
 
     LaunchedEffect(Unit) {
         container.agentCoordinator.compactionNotices.collect(onShowToast)
@@ -156,27 +183,48 @@ private fun ZaiRoot(
         }
     }
 
+    BackHandler(enabled = hasOverlay) {
+        route = when (route) {
+            OverlayRoute.SKILLS, OverlayRoute.MCP -> OverlayRoute.SETTINGS
+            else -> OverlayRoute.NONE
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(Color.Black),
     ) {
-        ChatRoute(
-            container = container,
-            inputHost = inputHost,
-            hasNewUpdate = latestRelease?.isNewer == true,
-            onOpenModels = { route = OverlayRoute.MODELS },
-            onOpenSettings = { route = OverlayRoute.SETTINGS },
-            onShowToast = onShowToast,
-        )
-
-        if (route != OverlayRoute.NONE) {
-            BackHandler {
-                route = when (route) {
-                    OverlayRoute.SKILLS, OverlayRoute.MCP -> OverlayRoute.SETTINGS
-                    else -> OverlayRoute.NONE
-                }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = underlyingScale
+                    scaleY = underlyingScale
+                },
+        ) {
+            ChatRoute(
+                container = container,
+                inputHost = inputHost,
+                hasNewUpdate = latestRelease?.isNewer == true,
+                onOpenModels = { route = OverlayRoute.MODELS },
+                onOpenSettings = { route = OverlayRoute.SETTINGS },
+                onShowToast = onShowToast,
+            )
+            if (scrimAlpha > 0.005f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = scrimAlpha)),
+                )
             }
+        }
+
+        AnimatedVisibility(
+            visible = hasOverlay,
+            enter = slideInHorizontally(animationSpec = ZaiMotion.SpringOffsetPage) { it } + fadeIn(tween(180)),
+            exit = slideOutHorizontally(animationSpec = ZaiMotion.SpringOffsetPage) { it } + fadeOut(tween(150)),
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -187,7 +235,7 @@ private fun ZaiRoot(
                         onClick = {},
                     ),
             ) {
-                when (route) {
+                when (if (hasOverlay) route else lastActiveOverlay) {
                     OverlayRoute.MODELS -> ModelsRoute(
                         container = container,
                         onOpenBrowserUrl = onOpenBrowserUrl,
@@ -271,6 +319,7 @@ private fun ChatRoute(
     val pendingConfirmation by coordinator.phoneController.pendingConfirmation.collectAsState()
     val liveVoiceState = inputHost.voiceControllerState.value?.listenState?.collectAsState()?.value
         ?: VoiceListenState.IDLE
+    val liveVoiceRmsDb = inputHost.voiceControllerState.value?.rmsDb?.collectAsState()?.value ?: 0f
 
     val activeSession = remember(sessions, activeSessionId) {
         sessions.firstOrNull { it.id == activeSessionId } ?: coordinator.currentSession()
@@ -312,6 +361,7 @@ private fun ChatRoute(
             pendingAttachments = inputHost.pendingAttachments.value,
             importingAttachments = inputHost.importingAttachments.value,
             voiceListenState = liveVoiceState,
+            voiceRmsDb = liveVoiceRmsDb,
         ),
         actions = ChatActions(
             onInputTextChange = { inputHost.chatInputText.value = it },

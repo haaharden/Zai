@@ -21,8 +21,8 @@ android {
     applicationId = "com.self.zai"
     minSdk = 29
     targetSdk = 35
-    versionCode = 31
-    versionName = "0.2.19"
+    versionCode = 32
+    versionName = "0.2.20"
   }
 
   signingConfigs {

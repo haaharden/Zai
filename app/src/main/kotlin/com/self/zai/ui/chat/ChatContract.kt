@@ -34,6 +34,7 @@ data class ChatUiState(
     val pendingAttachments: List<PendingAttachment> = emptyList(),
     val importingAttachments: Boolean = false,
     val voiceListenState: VoiceListenState = VoiceListenState.IDLE,
+    val voiceRmsDb: Float = 0f,
 )
 
 /** Explicit user-action callbacks for [ChatScreen]. */

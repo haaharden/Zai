@@ -61,9 +61,11 @@ import com.self.zai.model.ChatSession
 import com.self.zai.model.CompactionMode
 import com.self.zai.model.PendingConfirmation
 import com.self.zai.model.SessionContextUsage
+import com.self.zai.ui.components.LiveVoiceWaveform
 import com.self.zai.ui.components.ZaiInsetDivider
 import com.self.zai.ui.components.ZaiMonogramMark
 import com.self.zai.ui.components.ZaiPrimaryButton
+import com.self.zai.ui.components.applePress
 
 @Composable
 internal fun ZSettingsButton(
@@ -74,7 +76,7 @@ internal fun ZSettingsButton(
         modifier = Modifier
             .size(38.dp)
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick),
+            .applePress(scaleDown = 0.92f, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         ZaiMonogramMark(size = 22.dp)
@@ -102,7 +104,7 @@ internal fun HeaderSquareTrigger(
         modifier = Modifier
             .size(38.dp)
             .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled, onClick = onClick),
+            .applePress(enabled = enabled, scaleDown = 0.92f, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         icon()
@@ -178,43 +180,35 @@ internal fun ComposerControlPill(
 @Composable
 internal fun ChatMicButton(
     listening: Boolean,
+    rmsDb: Float = 0f,
     onClick: () -> Unit,
 ) {
-    val pulse = if (listening) {
-        val transition = rememberInfiniteTransition(label = "chatMicPulse")
-        val alpha by transition.animateFloat(
-            initialValue = 0.45f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
-            label = "chatMicAlpha",
-        )
-        alpha
-    } else {
-        1f
-    }
-
-    Surface(
-        onClick = onClick,
-        shape = CircleShape,
-        color = if (listening) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerLow
-        },
-        contentColor = if (listening) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        },
-        modifier = Modifier.size(38.dp),
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(
+                if (listening) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerLow
+                },
+            )
+            .applePress(scaleDown = 0.9f, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        if (listening) {
+            LiveVoiceWaveform(
+                rmsDb = rmsDb,
+                listening = true,
+                modifier = Modifier.size(width = 22.dp, height = 18.dp),
+            )
+        } else {
             Icon(
-                imageVector = if (listening) Icons.Rounded.GraphicEq else Icons.Rounded.Mic,
-                contentDescription = if (listening) "停止语音" else "语音输入",
-                modifier = Modifier
-                    .size(19.dp)
-                    .alpha(pulse),
+                imageVector = Icons.Rounded.Mic,
+                contentDescription = "语音输入",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(19.dp),
             )
         }
     }
