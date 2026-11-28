@@ -18,8 +18,10 @@ import android.os.Process
 import android.provider.Settings
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import com.self.zai.assistant.VoiceSpeechController
 import com.self.zai.assistant.ZaiAssistActivity
 import com.self.zai.assistant.ZaiNotificationListenerService
+import com.self.zai.assistant.ZaiVoiceInteractionService
 import com.self.zai.phone.ZaiAccessibilityService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -151,6 +153,63 @@ object DevicePermissionHelper {
         }.getOrDefault("")
         return secureAssist.startsWith("${context.packageName}/") ||
             secureVoice.startsWith("${context.packageName}/")
+    }
+
+    fun isVoiceInteractionBindingHealthy(
+        secureVoiceInteraction: String?,
+        expectedFullComponent: String,
+        expectedShortComponent: String,
+    ): Boolean {
+        val cleaned = secureVoiceInteraction?.trim().orEmpty()
+        if (cleaned.isEmpty() || cleaned.equals("null", ignoreCase = true)) return false
+        return cleaned.equals(expectedFullComponent, ignoreCase = true) ||
+            cleaned.equals(expectedShortComponent, ignoreCase = true)
+    }
+
+    fun isVoiceInteractionActiveInSettings(context: Context): Boolean {
+        val component = ComponentName(context, ZaiVoiceInteractionService::class.java)
+        val raw = runCatching {
+            Settings.Secure.getString(context.contentResolver, "voice_interaction_service")
+        }.getOrNull()
+        return isVoiceInteractionBindingHealthy(
+            secureVoiceInteraction = raw,
+            expectedFullComponent = component.flattenToString(),
+            expectedShortComponent = component.flattenToShortString(),
+        )
+    }
+
+    /**
+     * True when Zai is selected as the system default assistant (`ROLE_ASSISTANT` / `assistant`),
+     * yet HyperOS/Android cleared `voice_interaction_service` to empty (causing Power 0.5s to
+     * fail with ActivityStarterImpl result -92 trying to launch ZaiVoiceInteractionService as Activity).
+     */
+    fun needsVoiceInteractionRepair(context: Context): Boolean =
+        isDefaultAssistant(context) && !isVoiceInteractionActiveInSettings(context)
+
+    /**
+     * Restores `Settings.Secure.voice_interaction_service` (and preserves external ASR in
+     * `voice_recognition_service`) when Zai holds `WRITE_SECURE_SETTINGS`.
+     * Returns `true` if a repair write was performed, `false` if already healthy.
+     */
+    fun restoreVoiceInteractionServiceIfNeeded(context: Context): Result<Boolean> = runCatching {
+        if (!needsVoiceInteractionRepair(context)) return@runCatching false
+        require(hasWriteSecureSettings(context)) { "未授予 WRITE_SECURE_SETTINGS 权限" }
+        val component = ComponentName(context, ZaiVoiceInteractionService::class.java).flattenToString()
+        val okVoice = Settings.Secure.putString(
+            context.contentResolver,
+            "voice_interaction_service",
+            component,
+        )
+        val currentAssist = runCatching {
+            Settings.Secure.getString(context.contentResolver, "assistant").orEmpty()
+        }.getOrDefault("")
+        if (!currentAssist.startsWith("${context.packageName}/")) {
+            Settings.Secure.putString(context.contentResolver, "assistant", component)
+        }
+        val externalAsr = VoiceSpeechController.resolveExternalRecognitionService(context.applicationContext)
+        VoiceSpeechController.ensureSystemVoiceRecognitionService(context.applicationContext, externalAsr)
+        require(okVoice) { "系统拒绝写入 voice_interaction_service" }
+        true
     }
 
     fun isNotificationListenerEnabled(context: Context): Boolean {

@@ -4,6 +4,8 @@ import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.service.voice.VoiceInteractionService
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
@@ -29,6 +31,15 @@ class ZaiVoiceInteractionSessionService : VoiceInteractionSessionService() {
 
 class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(context) {
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    override fun onCreate() {
+        super.onCreate()
+        // Prevent the empty system VoiceInteractionSession window from stealing window focus
+        // while ZaiAssistActivity renders and starts speech recognition.
+        setUiEnabled(false)
+    }
+
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
         // Single-handed toggle: holding Power 0.5s while the overlay is already open dismisses it.
@@ -52,10 +63,17 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
             putExtra(ZaiAssistActivity.EXTRA_FROM_ASSISTANT, true)
             putExtra(ZaiAssistActivity.EXTRA_SHOW_FLAGS, showFlags)
         }
-        runCatching { context.startActivity(intent) }
-        // Hide the empty system VoiceInteractionSession window immediately so ZaiAssistActivity
-        // owns clean Compose rendering, IME keyboard resizing, and permission flows.
-        hide()
+        // Prefer VoiceInteractionSession.startAssistantActivity() which carries Android's system
+        // assistant BAL privilege on Android 14-16 / HyperOS, falling back to context.startActivity().
+        val launched = runCatching {
+            startAssistantActivity(intent)
+            true
+        }.getOrDefault(false)
+        if (!launched) {
+            runCatching { context.startActivity(intent) }
+        }
+        // Delay hide() briefly so the system assistant BAL token remains active during Binder dispatch.
+        mainHandler.postDelayed({ runCatching { hide() } }, 150L)
     }
 
     override fun onHandleAssist(state: AssistState) {

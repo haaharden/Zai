@@ -24,6 +24,7 @@ import com.self.zai.model.ModelOption
 import com.self.zai.model.ProviderQuota
 import com.self.zai.model.ProviderStatus
 import com.self.zai.model.TtsReadoutMode
+import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.phone.AppDirectory
 import com.self.zai.phone.PhoneController
 import com.self.zai.phone.ScreenSnapshot
@@ -214,6 +215,19 @@ class AssistantArchitectureTest {
         assertTrue(AssistantContextBridge.shouldToggleDismissOnReinvoke(nowMs = 10_800L))
         AssistantContextBridge.isOverlayVisible = false
         assertFalse(AssistantContextBridge.shouldToggleDismissOnReinvoke(nowMs = 12_000L))
+    }
+
+    @Test
+    fun voiceInteractionBindingCheck_detectsClearedSecureSettingAfterUpgrade() {
+        val full = "com.self.zai/com.self.zai.assistant.ZaiVoiceInteractionService"
+        val short = "com.self.zai/.assistant.ZaiVoiceInteractionService"
+
+        assertFalse(DevicePermissionHelper.isVoiceInteractionBindingHealthy(null, full, short))
+        assertFalse(DevicePermissionHelper.isVoiceInteractionBindingHealthy("", full, short))
+        assertFalse(DevicePermissionHelper.isVoiceInteractionBindingHealthy("null", full, short))
+        assertFalse(DevicePermissionHelper.isVoiceInteractionBindingHealthy("com.miui.voiceassist/.VoiceService", full, short))
+        assertTrue(DevicePermissionHelper.isVoiceInteractionBindingHealthy(full, full, short))
+        assertTrue(DevicePermissionHelper.isVoiceInteractionBindingHealthy(short, full, short))
     }
 
     private class FakeAssistantBackend : SystemAssistantBackend {

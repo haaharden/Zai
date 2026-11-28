@@ -150,6 +150,7 @@ fun SettingsScreen(
     var hasWriteSecure by remember { mutableStateOf(DevicePermissionHelper.hasWriteSecureSettings(context)) }
     var hasXiaomiBgPopup by remember { mutableStateOf(DevicePermissionHelper.hasXiaomiBgPopupPermission(context)) }
     var isDefaultAssistant by remember { mutableStateOf(DevicePermissionHelper.isDefaultAssistant(context)) }
+    var voiceInteractionHealthy by remember { mutableStateOf(!DevicePermissionHelper.needsVoiceInteractionRepair(context)) }
     var hasNotifListener by remember { mutableStateOf(DevicePermissionHelper.isNotificationListenerEnabled(context)) }
 
     var showDefaultModelSheet by remember { mutableStateOf(false) }
@@ -187,6 +188,7 @@ fun SettingsScreen(
                 hasWriteSecure = DevicePermissionHelper.hasWriteSecureSettings(context)
                 hasXiaomiBgPopup = DevicePermissionHelper.hasXiaomiBgPopupPermission(context)
                 isDefaultAssistant = DevicePermissionHelper.isDefaultAssistant(context)
+                voiceInteractionHealthy = !DevicePermissionHelper.needsVoiceInteractionRepair(context)
                 hasNotifListener = DevicePermissionHelper.isNotificationListenerEnabled(context)
             }
         }
@@ -577,17 +579,40 @@ fun SettingsScreen(
 
             // 3. System Personal Assistant & Voice
             ZaiPaperGroup(title = "助手与语音") {
+                val assistantBroken = isDefaultAssistant && !voiceInteractionHealthy
                 CompactStatusRow(
-                    dotColor = if (isDefaultAssistant) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
+                    dotColor = when {
+                        assistantBroken -> MaterialTheme.colorScheme.error
+                        isDefaultAssistant -> MaterialTheme.colorScheme.secondary
+                        else -> MaterialTheme.colorScheme.outline
+                    },
                     title = "默认数字助手",
-                    statusText = if (isDefaultAssistant) "已设为默认" else null,
-                    actionLabel = if (isDefaultAssistant) "试呼出" else "去设置",
+                    statusText = when {
+                        assistantBroken -> "语音服务脱绑"
+                        isDefaultAssistant -> "已设为默认"
+                        else -> null
+                    },
+                    actionLabel = when {
+                        assistantBroken && hasWriteSecure -> "修复"
+                        assistantBroken -> "重选"
+                        isDefaultAssistant -> "试呼出"
+                        else -> "去设置"
+                    },
                     onRowClick = { DevicePermissionHelper.openVoiceInputSettings(context) },
                     onAction = {
-                        if (isDefaultAssistant) {
-                            DevicePermissionHelper.openAssistOverlayPreview(context)
-                        } else {
-                            DevicePermissionHelper.openVoiceInputSettings(context)
+                        when {
+                            assistantBroken && hasWriteSecure -> {
+                                val res = DevicePermissionHelper.restoreVoiceInteractionServiceIfNeeded(context)
+                                voiceInteractionHealthy = !DevicePermissionHelper.needsVoiceInteractionRepair(context)
+                                val msg = res.fold(
+                                    onSuccess = { "已恢复电源键语音助手绑定" },
+                                    onFailure = { "恢复失败：${it.message}" },
+                                )
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            }
+                            assistantBroken -> DevicePermissionHelper.openVoiceInputSettings(context)
+                            isDefaultAssistant -> DevicePermissionHelper.openAssistOverlayPreview(context)
+                            else -> DevicePermissionHelper.openVoiceInputSettings(context)
                         }
                     },
                 )

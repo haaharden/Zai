@@ -226,8 +226,17 @@ class AppContainer(context: Context) {
         }
     }
 
+    fun autoRestoreVoiceInteractionIfPossible() {
+        if (!DevicePermissionHelper.needsVoiceInteractionRepair(appContext)) return
+        if (!DevicePermissionHelper.hasWriteSecureSettings(appContext)) return
+        appScope.launch {
+            DevicePermissionHelper.restoreVoiceInteractionServiceIfNeeded(appContext)
+        }
+    }
+
     fun startRuntime() {
         agentCoordinator.startRuntime()
+        autoRestoreVoiceInteractionIfPossible()
         autoRestoreAccessibilityIfPossible(force = true)
         appScope.launch {
             shizukuBridge.status.collect { st ->

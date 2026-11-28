@@ -46,6 +46,8 @@ class ZaiAssistActivity : ComponentActivity() {
     private var overlaySessionId = mutableStateOf<String?>(null)
     private var overlayStartIndex = mutableStateOf<Int?>(null)
     private var invokedAtMs = mutableStateOf(System.currentTimeMillis())
+    private var isResumedState = mutableStateOf(false)
+    private var lastAutoListenedInvocationMs: Long = -1L
     private var lastSpokenMessageId: String? = null
     private var suppressAutoDismissUntilMs: Long = 0L
     private var systemReceiverRegistered: Boolean = false
@@ -86,6 +88,7 @@ class ZaiAssistActivity : ComponentActivity() {
         val app = application as ZaiApplication
         val container = app.container
         ZaiAccessibilityService.isReallyConnected()
+        container.autoRestoreVoiceInteractionIfPossible()
         container.autoRestoreAccessibilityIfPossible()
         val settings = container.sessionRepository.settings.value
 
@@ -167,14 +170,18 @@ class ZaiAssistActivity : ComponentActivity() {
                 wasRunning = isRunning
             }
 
-            // Auto-start voice listening on open once the overlay is resumed and foreground
-            LaunchedEffect(invokedAtMs.value) {
-                if (liveSettings.assistantAutoListen &&
+            // Auto-start voice listening once the overlay is actually resumed (resilient to cold start)
+            LaunchedEffect(invokedAtMs.value, isResumedState.value) {
+                val invocationToken = invokedAtMs.value
+                if (isResumedState.value &&
+                    lastAutoListenedInvocationMs != invocationToken &&
+                    liveSettings.assistantAutoListen &&
                     DevicePermissionHelper.hasAudioPermission(this@ZaiAssistActivity) &&
                     !container.agentCoordinator.isRunning.value
                 ) {
-                    delay(220L)
-                    if (!isFinishing && !isDestroyed && AssistantContextBridge.isOverlayVisible) {
+                    delay(180L)
+                    if (!isFinishing && !isDestroyed && isResumedState.value && lastAutoListenedInvocationMs != invocationToken) {
+                        lastAutoListenedInvocationMs = invocationToken
                         speechController?.startListening()
                     }
                 }
@@ -263,6 +270,7 @@ class ZaiAssistActivity : ComponentActivity() {
         }
         val app = application as ZaiApplication
         ZaiAccessibilityService.isReallyConnected()
+        app.container.autoRestoreVoiceInteractionIfPossible()
         app.container.autoRestoreAccessibilityIfPossible()
         visibleState.value = true
         AssistantContextBridge.overlayOpenedAtMs = System.currentTimeMillis()
@@ -278,6 +286,7 @@ class ZaiAssistActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        isResumedState.value = true
         AssistantContextBridge.isOverlayVisible = true
     }
 
@@ -289,6 +298,7 @@ class ZaiAssistActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        isResumedState.value = false
         AssistantContextBridge.isOverlayVisible = false
         speechController?.cancelListening()
         (application as? ZaiApplication)?.container?.agentCoordinator?.onUiBackgroundedIfRunning()

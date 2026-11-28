@@ -374,6 +374,7 @@ class MainActivity : ComponentActivity() {
         ) {
             container.shizukuBridge.bindAsync()
         }
+        container.autoRestoreVoiceInteractionIfPossible()
         container.autoRestoreAccessibilityIfPossible()
     }
 
