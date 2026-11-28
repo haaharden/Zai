@@ -22,6 +22,12 @@ import com.self.zai.phone.ZaiAccessibilityService
 class ZaiVoiceInteractionService : VoiceInteractionService() {
     override fun onReady() {
         super.onReady()
+        // Disable SystemUI AssistStructure / screenshot capture so Android does not flash
+        // the white `AssistDisclosure` border window on every Power-button summon
+        // (Zai already reads foreground screen context via ZaiAccessibilityService).
+        setDisabledShowContext(
+            VoiceInteractionSession.SHOW_WITH_ASSIST or VoiceInteractionSession.SHOW_WITH_SCREENSHOT,
+        )
     }
 }
 
@@ -34,6 +40,7 @@ class ZaiVoiceInteractionSession(context: Context) : VoiceInteractionSession(con
 
     override fun onCreate() {
         super.onCreate()
+        setDisabledShowContext(SHOW_WITH_ASSIST or SHOW_WITH_SCREENSHOT)
         // Fallback transparent theme in case any ROM creates the session Dialog despite setUiEnabled(false).
         setTheme(R.style.Theme_Zai_AssistOverlay)
         setUiEnabled(false)
