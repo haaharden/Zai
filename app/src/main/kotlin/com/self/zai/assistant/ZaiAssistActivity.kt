@@ -292,7 +292,8 @@ class ZaiAssistActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (System.currentTimeMillis() > suppressAutoDismissUntilMs) {
+        val now = System.currentTimeMillis()
+        if (now > suppressAutoDismissUntilMs && now - AssistantContextBridge.overlayOpenedAtMs > 500L) {
             dismissCleanly()
         }
     }
