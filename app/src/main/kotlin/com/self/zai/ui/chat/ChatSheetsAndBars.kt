@@ -53,6 +53,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,6 +63,7 @@ import com.self.zai.model.CompactionMode
 import com.self.zai.model.PendingConfirmation
 import com.self.zai.model.SessionContextUsage
 import com.self.zai.ui.components.LiveVoiceWaveform
+import com.self.zai.ui.components.ZaiHaptics
 import com.self.zai.ui.components.ZaiInsetDivider
 import com.self.zai.ui.components.ZaiMonogramMark
 import com.self.zai.ui.components.ZaiPrimaryButton
@@ -136,12 +138,19 @@ internal fun ComposerControlPill(
         MaterialTheme.colorScheme.onSurface
     }
 
+    val view = LocalView.current
     Surface(
-        onClick = onClick,
         shape = RoundedCornerShape(16.dp),
         color = bg,
         border = BorderStroke(0.6.dp, border),
-        modifier = modifier,
+        modifier = modifier.applePress(
+            scaleDown = 0.95f,
+            hapticTick = false,
+            onClick = {
+                ZaiHaptics.tap(view)
+                onClick()
+            },
+        ),
     ) {
         Row(
             modifier = Modifier.padding(start = 11.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),

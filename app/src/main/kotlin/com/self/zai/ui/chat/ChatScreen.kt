@@ -1,25 +1,31 @@
 package com.self.zai.ui.chat
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -44,6 +50,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,8 +62,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,7 +78,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.self.zai.model.MessageRole
 import com.self.zai.permission.DevicePermissionHelper
 import com.self.zai.ui.components.ZaiModelPickerSheet
-import com.self.zai.ui.components.ZaiThinkingPickerSheet
+import com.self.zai.ui.components.ZaiMotion
+import com.self.zai.ui.components.ZaiThinkingPopoverCard
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -75,6 +89,10 @@ fun ChatScreen(
     actions: ChatActions,
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
     val lifecycleOwner = LocalLifecycleOwner.current
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -84,7 +102,23 @@ fun ChatScreen(
     var showThinkingPicker by remember { mutableStateOf(false) }
     var showContextSheet by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
+    var composerAreaHeightPx by remember { mutableIntStateOf(0) }
     var lightboxData by remember { mutableStateOf<ImageLightboxData?>(null) }
+
+    // Prevent IME collapse vs ModalBottomSheet entrance double-bounce when opening heavy full sheets
+    fun openModalSheetAfterIme(open: () -> Unit) {
+        showThinkingPicker = false
+        if (imeBottomPx > 0) {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+            scope.launch {
+                delay(160L)
+                open()
+            }
+        } else {
+            open()
+        }
+    }
     var hasWriteSecure by remember { mutableStateOf(DevicePermissionHelper.hasWriteSecureSettings(context)) }
     var a11ySettingOn by remember { mutableStateOf(DevicePermissionHelper.isAccessibilityEnabledInSettings(context)) }
     var repairingA11y by remember { mutableStateOf(false) }
@@ -187,13 +221,24 @@ fun ChatScreen(
             }
     }
 
-    Column(
+    val isDarkBg = MaterialTheme.colorScheme.background.luminance() < 0.4f
+    val thinkingModel = state.sessionModel?.takeIf { it.supportsThinkingSelection }
+    val thinkingPopoverVisible = showThinkingPicker && thinkingModel != null
+
+    if (thinkingPopoverVisible) {
+        BackHandler { showThinkingPicker = false }
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding(),
+    ) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
     ) {
         // Minimal editorial top bar
         Row(
@@ -211,7 +256,7 @@ fun ChatScreen(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 HeaderSquareTrigger(
-                    onClick = { showSessionsSheet = true },
+                    onClick = { openModalSheetAfterIme { showSessionsSheet = true } },
                     contentDescription = "会话记录",
                 ) {
                     Icon(
@@ -487,27 +532,83 @@ fun ChatScreen(
             onSelectSkillPrefix = actions.onInputTextChange,
         )
 
-        ComposerControlStrip(
-            state = state,
-            hasControlChannel = hasControlChannel,
-            onOpenModelPicker = { showModelPicker = true },
-            onOpenModels = actions.onOpenModels,
-            onOpenThinkingPicker = { showThinkingPicker = true },
-            onOpenContextSheet = { showContextSheet = true },
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { composerAreaHeightPx = it.height },
+        ) {
+            ComposerControlStrip(
+                state = state,
+                hasControlChannel = hasControlChannel,
+                onOpenModelPicker = { openModalSheetAfterIme { showModelPicker = true } },
+                onOpenModels = actions.onOpenModels,
+                onOpenThinkingPicker = { showThinkingPicker = !showThinkingPicker },
+                onOpenContextSheet = { openModalSheetAfterIme { showContextSheet = true } },
+            )
 
-        ComposerDock(
-            state = state,
-            actions = actions,
-            isCurrentSessionRunning = isCurrentSessionRunning,
-            backgroundRunningSession = backgroundRunningSession,
-            onOpenAttachmentSheet = { showAttachmentSheet = true },
-            onOpenLightbox = { lightboxData = it },
-            onSentSuccess = {
-                autoFollowBottom = true
-                scope.launch { listState.animateScrollToItem(bottomAnchorIndex) }
-            },
+            ComposerDock(
+                state = state,
+                actions = actions,
+                isCurrentSessionRunning = isCurrentSessionRunning,
+                backgroundRunningSession = backgroundRunningSession,
+                onOpenAttachmentSheet = { openModalSheetAfterIme { showAttachmentSheet = true } },
+                onOpenLightbox = { lightboxData = it },
+                onSentSuccess = {
+                    showThinkingPicker = false
+                    autoFollowBottom = true
+                    scope.launch { listState.animateScrollToItem(bottomAnchorIndex) }
+                },
+            )
+        }
+    }
+
+    // In-window tap-catcher scrim for Apple thinking popover (keeps IME keyboard rock-steady!)
+    androidx.compose.animation.AnimatedVisibility(
+        visible = thinkingPopoverVisible,
+        enter = fadeIn(tween(150)),
+        exit = fadeOut(tween(120)),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = if (isDarkBg) 0.24f else 0.08f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { showThinkingPicker = false },
+                ),
         )
+    }
+
+    // In-window Apple floating popover anchored directly above the composer control strip
+    val popoverBottomPadding = with(density) { composerAreaHeightPx.toDp() } + 8.dp
+    androidx.compose.animation.AnimatedVisibility(
+        visible = thinkingPopoverVisible,
+        enter = fadeIn(tween(150)) + scaleIn(
+            initialScale = 0.90f,
+            transformOrigin = TransformOrigin(0.35f, 1f),
+            animationSpec = ZaiMotion.SpringSnappy,
+        ),
+        exit = fadeOut(tween(115)) + scaleOut(
+            targetScale = 0.92f,
+            transformOrigin = TransformOrigin(0.35f, 1f),
+            animationSpec = tween(115),
+        ),
+        modifier = Modifier
+            .align(Alignment.BottomStart)
+            .padding(start = 18.dp, end = 18.dp, bottom = popoverBottomPadding),
+    ) {
+        val modelForPopover = thinkingModel
+        if (modelForPopover != null) {
+            ZaiThinkingPopoverCard(
+                model = modelForPopover,
+                selectedLevel = state.sessionThinkingLevel,
+                onSelect = actions.onSelectSessionThinking,
+                onDismiss = { showThinkingPicker = false },
+            )
+        }
+    }
     }
 
     if (showAttachmentSheet) {
@@ -547,15 +648,6 @@ fun ChatScreen(
             onOpenSettings = actions.onOpenSettings,
             onCompactSession = actions.onCompactSession,
             onDismiss = { showContextSheet = false },
-        )
-    }
-
-    if (showThinkingPicker && state.sessionModel != null && state.sessionModel.supportsThinkingSelection) {
-        ZaiThinkingPickerSheet(
-            model = state.sessionModel,
-            selectedLevel = state.sessionThinkingLevel,
-            onSelect = actions.onSelectSessionThinking,
-            onDismiss = { showThinkingPicker = false },
         )
     }
 
